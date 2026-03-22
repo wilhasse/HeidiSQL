@@ -12,7 +12,7 @@ uses
   System.Classes, System.SysUtils, Vcl.Graphics, Vcl.GraphUtil, Vcl.ClipBrd, Vcl.Dialogs, Vcl.Forms, Vcl.Controls, Winapi.ShellApi,
   Winapi.Windows, Winapi.ShlObj, Winapi.ActiveX, VirtualTrees, VirtualTrees.BaseTree, VirtualTrees.Types, SynRegExpr, Winapi.Messages, System.Math,
   System.Win.Registry, System.DateUtils, System.Generics.Collections, System.Contnrs, System.StrUtils, System.AnsiStrings, Winapi.TlHelp32, System.Types,
-  dbconnection, dbstructures, dbstructures.mysql, SynMemo, Vcl.Menus, Winapi.WinInet, gnugettext, Vcl.Themes,
+  dbconnection, sqlmonitor, dbstructures, dbstructures.mysql, SynMemo, Vcl.Menus, Winapi.WinInet, gnugettext, Vcl.Themes,
   System.Character, Vcl.ImgList, System.UITypes, Vcl.ActnList, Winapi.WinSock, System.IOUtils, Vcl.StdCtrls, Vcl.ComCtrls,
   Winapi.CommCtrl, Winapi.KnownFolders, SynUnicode, SynEdit, System.IniFiles;
 
@@ -98,12 +98,21 @@ type
       FBytesRead: Integer;
       FTimeOut: Cardinal;
       FOnProgress: TNotifyEvent;
+      FMethod: String;
+      FRequestBody: String;
+      FRequestHeaders: TStringList;
+      FStatusCode: Integer;
     public
       constructor Create(Owner: TComponent);
+      destructor Destroy; override;
       procedure SendRequest(Filename: String);
       property OnProgress: TNotifyEvent read FOnProgress write FOnProgress;
       property URL: String read FURL write FURL;
       property TimeOut: Cardinal read FTimeOut write FTimeOut;
+      property Method: String read FMethod write FMethod;
+      property RequestBody: String read FRequestBody write FRequestBody;
+      property RequestHeaders: TStringList read FRequestHeaders;
+      property StatusCode: Integer read FStatusCode;
       property BytesRead: Integer read FBytesRead;
       property LastContent: String read FLastContent;
   end;
@@ -135,6 +144,7 @@ type
     FRowsAffected: Int64;
     FRowsFound: Int64;
     FWarningCount: Int64;
+    FSqlMonitorContext: TSqlMonitorExecutionContext;
   public
     property Connection: TDBConnection read FConnection;
     property Batch: TSQLBatch read FBatch;
@@ -149,7 +159,8 @@ type
     property WarningCount: Int64 read FWarningCount;
     property Aborted: Boolean read FAborted write FAborted;
     property ErrorMessage: String read FErrorMessage;
-    constructor Create(Connection: TDBConnection; Batch: TSQLBatch; TabNumber: Integer);
+    constructor Create(Connection: TDBConnection; Batch: TSQLBatch; TabNumber: Integer; SqlMonitorContext: TSqlMonitorExecutionContext=nil);
+    destructor Destroy; override;
     procedure Execute; override;
     procedure LogFromThread(Msg: String; Category: TDBLogCategory);
   end;
@@ -219,7 +230,7 @@ type
     asWarnUnsafeUpdates, asQueryGridLongSortRowNum,
     asCompletionProposal, asCompletionProposalInterval, asCompletionProposalSearchOnMid, asCompletionProposalWidth, asCompletionProposalNbLinesInWindow, asAutoUppercase,
     asTabsToSpaces, asFilterPanel, asAllowMultipleInstances, asFindDialogSearchHistory, asGUIFontName, asGUIFontSize,
-    asTheme, asIconPack, asWebSearchBaseUrl,
+    asTheme, asIconPack, asWebSearchBaseUrl, asSqlMonitorUrl, asSqlMonitorApiKey,
     asFindDialogReplaceHistory, asMaxQueryResults, asLogErrors,
     asLogUserSQL, asLogSQL, asLogInfos, asLogDebug, asLogScript, asLogTimestamp, asFieldColorNumeric,
     asFieldColorReal, asFieldColorText, asFieldColorBinary, asFieldColorDatetime, asFieldColorSpatial,
@@ -3177,13 +3188,17 @@ end;
 
 function UserAgent(OwnerComponent: TComponent): String;
 var
-  OS: String;
+  OS, OwnerName: String;
 begin
   if IsWine then
     OS := 'Linux/Wine'
   else
     OS := 'Windows NT '+IntToStr(Win32MajorVersion)+'.'+IntToStr(Win32MinorVersion);
-  Result := APPNAME+'/'+MainForm.AppVersion+' ('+OS+'; '+ExtractFilename(Application.ExeName)+'; '+OwnerComponent.Name+')';
+  if Assigned(OwnerComponent) then
+    OwnerName := OwnerComponent.Name
+  else
+    OwnerName := APPNAME;
+  Result := APPNAME+'/'+MainForm.AppVersion+' ('+OS+'; '+ExtractFilename(Application.ExeName)+'; '+OwnerName+')';
 end;
 
 
@@ -3256,7 +3271,8 @@ end; }
 
 { Threading stuff }
 
-constructor TQueryThread.Create(Connection: TDBConnection; Batch: TSQLBatch; TabNumber: Integer);
+constructor TQueryThread.Create(Connection: TDBConnection; Batch: TSQLBatch; TabNumber: Integer;
+  SqlMonitorContext: TSqlMonitorExecutionContext=nil);
 begin
   inherited Create(False);
   FConnection := Connection;
@@ -3271,19 +3287,30 @@ begin
   FRowsFound := 0;
   FWarningCount := 0;
   FErrorMessage := '';
-  FBatchInOneGo := MainForm.actBatchInOneGo.Checked;
+  FSqlMonitorContext := SqlMonitorContext;
+  FBatchInOneGo := MainForm.actBatchInOneGo.Checked and (FSqlMonitorContext = nil);
   FStopOnErrors := MainForm.actQueryStopOnErrors.Checked;
   FreeOnTerminate := True;
   Priority := tpNormal;
 end;
 
 
+destructor TQueryThread.Destroy;
+begin
+  FSqlMonitorContext.Free;
+  FBatch.Free;
+  inherited;
+end;
+
+
 procedure TQueryThread.Execute;
 var
   SQL: String;
-  i, BatchStartOffset, ResultCount: Integer;
+  i, BatchStartOffset, ResultCount, CurrentStatementIndex: Integer;
   PacketSize, MaxAllowedPacket: Int64;
   DoStoreResult, ErrorAborted, LogMaxResultsDone: Boolean;
+  StatementDuration: Cardinal;
+  StatementError: String;
 begin
   inherited;
 
@@ -3293,73 +3320,107 @@ begin
   ErrorAborted := False;
   LogMaxResultsDone := False;
 
-  while i < FBatch.Count do begin
-    SQL := '';
-    if not FBatchInOneGo then begin
-      SQL := FBatch[i].SQL;
-      Inc(i);
-    end else begin
-      // Concat queries up to a size of max_allowed_packet
-      if MaxAllowedPacket = 0 then begin
-        FConnection.SetLockedByThread(Self);
-        MaxAllowedPacket := FConnection.MaxAllowedPacket;
-        FConnection.SetLockedByThread(nil);
-        // TODO: Log('Detected maximum allowed packet size: '+FormatByteNumber(MaxAllowedPacket), lcDebug);
+  try
+    while i < FBatch.Count do begin
+      SQL := '';
+      CurrentStatementIndex := -1;
+      if not FBatchInOneGo then begin
+        CurrentStatementIndex := i;
+        SQL := FBatch[i].SQL;
+        Inc(i);
+        FQueriesInPacket := 1;
+      end else begin
+        // Concat queries up to a size of max_allowed_packet
+        if MaxAllowedPacket = 0 then begin
+          FConnection.SetLockedByThread(Self);
+          MaxAllowedPacket := FConnection.MaxAllowedPacket;
+          FConnection.SetLockedByThread(nil);
+          // TODO: Log('Detected maximum allowed packet size: '+FormatByteNumber(MaxAllowedPacket), lcDebug);
+        end;
+        BatchStartOffset := FBatch[i].LeftOffset;
+        while i < FBatch.Count do begin
+          PacketSize := FBatch[i].RightOffset - BatchStartOffset + ((i-FBatchPosition) * 20);
+          if not SQL.IsEmpty then begin
+            if PacketSize >= MaxAllowedPacket then begin
+              // TODO: Log('Limiting batch packet size to '+FormatByteNumber(Length(SQL))+' with '+FormatNumber(i-FUserQueryOffset)+' queries.', lcDebug);
+              Break;
+            end
+            else begin
+              // Don't append to the very last query. See issue #1583
+              SQL := SQL + '; ';
+            end;
+          end;
+          SQL := SQL + FBatch[i].SQL;
+          Inc(i);
+        end;
+        FQueriesInPacket := i - FBatchPosition;
       end;
-      BatchStartOffset := FBatch[i].LeftOffset;
-      while i < FBatch.Count do begin
-        PacketSize := FBatch[i].RightOffset - BatchStartOffset + ((i-FBatchPosition) * 20);
-        if not SQL.IsEmpty then begin
-          if PacketSize >= MaxAllowedPacket then begin
-            // TODO: Log('Limiting batch packet size to '+FormatByteNumber(Length(SQL))+' with '+FormatNumber(i-FUserQueryOffset)+' queries.', lcDebug);
-            Break;
-          end
-          else begin
-            // Don't append to the very last query. See issue #1583
-            SQL := SQL + '; ';
+      Synchronize(procedure begin MainForm.BeforeQueryExecution(Self); end);
+      try
+        FConnection.SetLockedByThread(Self);
+        DoStoreResult := ResultCount < AppSettings.ReadInt(asMaxQueryResults);
+        if (not DoStoreResult) and (not LogMaxResultsDone) then begin
+          // Inform user about preference setting for limiting result tabs
+          FConnection.Log(lcInfo,
+            f_('Reached maximum number of result tabs (%d). To display more results, increase setting in Preferences > SQL', [AppSettings.ReadInt(asMaxQueryResults)])
+            );
+          LogMaxResultsDone := True;
+        end;
+        FConnection.Query(SQL, DoStoreResult, lcUserFiredSQL);
+        Inc(ResultCount, FConnection.ResultCount);
+        FBatchPosition := i;
+        StatementDuration := FConnection.LastQueryDuration + FConnection.LastQueryNetworkDuration;
+        Inc(FQueryTime, FConnection.LastQueryDuration);
+        Inc(FQueryNetTime, FConnection.LastQueryNetworkDuration);
+        Inc(FRowsAffected, FConnection.RowsAffected);
+        Inc(FRowsFound, FConnection.RowsFound);
+        Inc(FWarningCount, FConnection.WarningCount);
+        if (FSqlMonitorContext <> nil) and (CurrentStatementIndex > -1) then begin
+          FSqlMonitorContext.MarkStatementResult(CurrentStatementIndex, True, StatementDuration,
+            FConnection.RowsAffected, FConnection.RowsFound, '');
+        end;
+      except
+        on E:EDbError do begin
+          StatementError := E.Message;
+          if (FSqlMonitorContext <> nil) and (CurrentStatementIndex > -1) then begin
+            FSqlMonitorContext.MarkStatementResult(CurrentStatementIndex, False,
+              FConnection.LastQueryDuration + FConnection.LastQueryNetworkDuration,
+              FConnection.RowsAffected, FConnection.RowsFound, StatementError);
+          end;
+          if FStopOnErrors or (i = FBatch.Count) then begin
+            FErrorMessage := StatementError;
+            ErrorAborted := True;
           end;
         end;
-        SQL := SQL + FBatch[i].SQL;
-        Inc(i);
-      end;
-      FQueriesInPacket := i - FBatchPosition;
-    end;
-    Synchronize(procedure begin MainForm.BeforeQueryExecution(Self); end);
-    try
-      FConnection.SetLockedByThread(Self);
-      DoStoreResult := ResultCount < AppSettings.ReadInt(asMaxQueryResults);
-      if (not DoStoreResult) and (not LogMaxResultsDone) then begin
-        // Inform user about preference setting for limiting result tabs
-        FConnection.Log(lcInfo,
-          f_('Reached maximum number of result tabs (%d). To display more results, increase setting in Preferences > SQL', [AppSettings.ReadInt(asMaxQueryResults)])
-          );
-        LogMaxResultsDone := True;
-      end;
-      FConnection.Query(SQL, DoStoreResult, lcUserFiredSQL);
-      Inc(ResultCount, FConnection.ResultCount);
-      FBatchPosition := i;
-      Inc(FQueryTime, FConnection.LastQueryDuration);
-      Inc(FQueryNetTime, FConnection.LastQueryNetworkDuration);
-      Inc(FRowsAffected, FConnection.RowsAffected);
-      Inc(FRowsFound, FConnection.RowsFound);
-      Inc(FWarningCount, FConnection.WarningCount);
-    except
-      on E:EDbError do begin
-        if FStopOnErrors or (i = FBatch.Count) then begin
-          FErrorMessage := E.Message;
+        on E:Exception do begin
+          StatementError := E.Message;
+          if (FSqlMonitorContext <> nil) and (CurrentStatementIndex > -1) then begin
+            FSqlMonitorContext.MarkStatementResult(CurrentStatementIndex, False,
+              FConnection.LastQueryDuration + FConnection.LastQueryNetworkDuration,
+              FConnection.RowsAffected, FConnection.RowsFound, StatementError);
+          end;
+          FErrorMessage := StatementError;
           ErrorAborted := True;
         end;
       end;
+      FConnection.SetLockedByThread(nil);
+      Synchronize(procedure begin MainForm.AfterQueryExecution(Self); end);
+      // Check if FAborted is set by the main thread, to avoid proceeding the loop in case
+      // FStopOnErrors is set to false
+      if FAborted or ErrorAborted then
+        break;
     end;
-    FConnection.SetLockedByThread(nil);
-    Synchronize(procedure begin MainForm.AfterQueryExecution(Self); end);
-    // Check if FAborted is set by the main thread, to avoid proceeding the loop in case
-    // FStopOnErrors is set to false
-    if FAborted or ErrorAborted then
-      break;
+  finally
+    if FSqlMonitorContext <> nil then begin
+      try
+        FSqlMonitorContext.SendCompletion(FConnection, FQueryTime + FQueryNetTime);
+      except
+        on E:Exception do
+          LogFromThread(_('SQL monitor completion callback failed: ') + E.Message, lcError);
+      end;
+    end;
+    Synchronize(procedure begin MainForm.FinishedQueryExecution(Self); end);
   end;
-
-  Synchronize(procedure begin MainForm.FinishedQueryExecution(Self); end);
 end;
 
 
@@ -3593,20 +3654,35 @@ begin
   FBytesRead := -1;
   FOwner := Owner;
   FTimeOut := 10;
+  FMethod := 'GET';
+  FRequestBody := '';
+  FStatusCode := 0;
+  FRequestHeaders := TStringList.Create;
+  FRequestHeaders.NameValueSeparator := ':';
+end;
+
+
+destructor THttpDownload.Destroy;
+begin
+  FRequestHeaders.Free;
+  inherited;
 end;
 
 
 procedure THttpDownload.SendRequest(Filename: String);
 var
-  NetHandle: HINTERNET;
-  UrlHandle: HINTERNET;
+  NetHandle, UrlHandle, ConnectHandle: HINTERNET;
   Buffer: array[1..4096] of AnsiChar;
   Head: array[1..1024] of Char;
+  UrlComp: TURLComponents;
+  HostName, ResourcePath, ExtraInfo, RequestMethod, HeaderLines: String;
   BytesInChunk, HeadSize, Reserved, TimeOutSeconds: Cardinal;
   LocalFile: File;
-  DoStore: Boolean;
-  HttpStatus: Integer;
-  ContentChunk: UTF8String;
+  DoStore, IsHttps: Boolean;
+  ContentChunk, HeaderTextUtf8: UTF8String;
+  RequestBodyBytes: TBytes;
+  OptionalData: Pointer;
+  HostBuffer, UrlPathBuffer, ExtraBuffer: array[0..2047] of Char;
 begin
   DoStore := False;
   NetHandle := InternetOpen(PChar(UserAgent(FOwner)), INTERNET_OPEN_TYPE_PRECONFIG, nil, nil, 0);
@@ -3614,23 +3690,79 @@ begin
   // Do not let the user wait 30s
   TimeOutSeconds := FTimeOut * 1000;
   InternetSetOption(NetHandle, INTERNET_OPTION_CONNECT_TIMEOUT, @TimeOutSeconds, SizeOf(TimeOutSeconds));
+  InternetSetOption(NetHandle, INTERNET_OPTION_SEND_TIMEOUT, @TimeOutSeconds, SizeOf(TimeOutSeconds));
+  InternetSetOption(NetHandle, INTERNET_OPTION_RECEIVE_TIMEOUT, @TimeOutSeconds, SizeOf(TimeOutSeconds));
 
   UrlHandle := nil;
+  ConnectHandle := nil;
   FLastContent := '';
+  FBytesRead := 0;
+  FStatusCode := 0;
+  RequestMethod := UpperCase(Trim(FMethod));
+  if RequestMethod.IsEmpty then
+    RequestMethod := 'GET';
   try
-    UrlHandle := InternetOpenURL(NetHandle, PChar(FURL), nil, 0, INTERNET_FLAG_RELOAD, 0);
-    if not Assigned(UrlHandle) then begin
-      raise Exception.CreateFmt(_('Could not open %s (%s)'), [FURL, SysErrorMessage(GetLastError)]);
+    if (RequestMethod = 'GET') and FRequestBody.IsEmpty and (FRequestHeaders.Count = 0) then begin
+      UrlHandle := InternetOpenURL(NetHandle, PChar(FURL), nil, 0, INTERNET_FLAG_RELOAD, 0);
+      if not Assigned(UrlHandle) then begin
+        raise Exception.CreateFmt(_('Could not open %s (%s)'), [FURL, SysErrorMessage(GetLastError)]);
+      end;
+    end else begin
+      FillChar(UrlComp, SizeOf(UrlComp), 0);
+      FillChar(HostBuffer, SizeOf(HostBuffer), 0);
+      FillChar(UrlPathBuffer, SizeOf(UrlPathBuffer), 0);
+      FillChar(ExtraBuffer, SizeOf(ExtraBuffer), 0);
+      UrlComp.dwStructSize := SizeOf(UrlComp);
+      UrlComp.lpszHostName := HostBuffer;
+      UrlComp.dwHostNameLength := Length(HostBuffer);
+      UrlComp.lpszUrlPath := UrlPathBuffer;
+      UrlComp.dwUrlPathLength := Length(UrlPathBuffer);
+      UrlComp.lpszExtraInfo := ExtraBuffer;
+      UrlComp.dwExtraInfoLength := Length(ExtraBuffer);
+      if not InternetCrackUrl(PChar(FURL), Length(FURL), 0, UrlComp) then
+        raise Exception.CreateFmt(_('Could not parse %s (%s)'), [FURL, SysErrorMessage(GetLastError)]);
+
+      SetString(HostName, UrlComp.lpszHostName, UrlComp.dwHostNameLength);
+      SetString(ResourcePath, UrlComp.lpszUrlPath, UrlComp.dwUrlPathLength);
+      SetString(ExtraInfo, UrlComp.lpszExtraInfo, UrlComp.dwExtraInfoLength);
+      ResourcePath := ResourcePath + ExtraInfo;
+      if ResourcePath.IsEmpty then
+        ResourcePath := '/';
+      IsHttps := UrlComp.nScheme = INTERNET_SCHEME_HTTPS;
+
+      ConnectHandle := InternetConnect(NetHandle, PChar(HostName), UrlComp.nPort, nil, nil, INTERNET_SERVICE_HTTP, 0, 0);
+      if not Assigned(ConnectHandle) then
+        raise Exception.CreateFmt(_('Could not connect to %s (%s)'), [FURL, SysErrorMessage(GetLastError)]);
+
+      UrlHandle := HttpOpenRequest(ConnectHandle, PChar(RequestMethod), PChar(ResourcePath), nil, nil, nil,
+        INTERNET_FLAG_RELOAD or IfThen(IsHttps, INTERNET_FLAG_SECURE, 0), 0);
+      if not Assigned(UrlHandle) then
+        raise Exception.CreateFmt(_('Could not open %s (%s)'), [FURL, SysErrorMessage(GetLastError)]);
+
+      HeaderLines := '';
+      if FRequestHeaders.Count > 0 then
+        HeaderLines := FRequestHeaders.Text;
+      if not HeaderLines.IsEmpty then begin
+        HeaderTextUtf8 := UTF8String(HeaderLines);
+        HttpAddRequestHeadersA(UrlHandle, PAnsiChar(HeaderTextUtf8), Length(HeaderTextUtf8), HTTP_ADDREQ_FLAG_ADD or HTTP_ADDREQ_FLAG_REPLACE);
+      end;
+
+      RequestBodyBytes := TEncoding.UTF8.GetBytes(FRequestBody);
+      if Length(RequestBodyBytes) > 0 then
+        OptionalData := @RequestBodyBytes[0]
+      else
+        OptionalData := nil;
+      if not HttpSendRequest(UrlHandle, nil, 0, OptionalData, Length(RequestBodyBytes)) then
+        raise Exception.CreateFmt(_('Could not open %s (%s)'), [FURL, SysErrorMessage(GetLastError)]);
     end;
 
-    // Check if we got HTTP status 200
+    // Check if we got a valid HTTP status code
     HeadSize := SizeOf(Head);
     Reserved := 0;
-    if HttpQueryInfo(UrlHandle, HTTP_QUERY_STATUS_CODE, @Head, HeadSize, Reserved) then begin
-      HttpStatus := StrToIntDef(Head, -1);
-      if HttpStatus <> 200 then
-        raise Exception.CreateFmt(_('Got HTTP status %d from %s'), [HttpStatus, FURL]);
-    end;
+    if HttpQueryInfo(UrlHandle, HTTP_QUERY_STATUS_CODE, @Head, HeadSize, Reserved) then
+      FStatusCode := StrToIntDef(Head, -1)
+    else
+      FStatusCode := -1;
 
     // Create local file
     if Filename <> '' then begin
@@ -3661,11 +3793,12 @@ begin
       CloseFile(LocalFile);
     if Assigned(UrlHandle) then
       InternetCloseHandle(UrlHandle);
+    if Assigned(ConnectHandle) then
+      InternetCloseHandle(ConnectHandle);
     if Assigned(NetHandle) then
       InternetCloseHandle(NetHandle);
   end;
 end;
-
 
 
 { TExtStringList }
@@ -4087,6 +4220,8 @@ begin
   InitSetting(asTheme,                            'Theme',                                 0, False, 'Windows');
   InitSetting(asIconPack,                         'IconPack',                              0, False, 'Icons8');
   InitSetting(asWebSearchBaseUrl,                 'WebSearchBaseUrl',                      0, False, 'https://www.ecosia.org/search?q=%query');
+  InitSetting(asSqlMonitorUrl,                    'SqlMonitorUrl',                         0, False, '');
+  InitSetting(asSqlMonitorApiKey,                 'SqlMonitorApiKey',                      0, False, '');
   InitSetting(asMaxQueryResults,                  'MaxQueryResults',                       10);
   InitSetting(asLogErrors,                        'LogErrors',                             0, True);
   InitSetting(asLogUserSQL,                       'LogUserSQL',                            0, True);

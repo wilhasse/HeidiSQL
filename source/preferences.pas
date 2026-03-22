@@ -1,4 +1,4 @@
-unit preferences;
+﻿unit preferences;
 
 
 // -------------------------------------
@@ -166,6 +166,10 @@ type
     chkLogEventScript: TCheckBox;
     lblWebSearchBaseUrl: TLabel;
     comboWebSearchBaseUrl: TComboBox;
+    lblSqlMonitorUrl: TLabel;
+    editSqlMonitorUrl: TEdit;
+    lblSqlMonitorApiKey: TLabel;
+    editSqlMonitorApiKey: TEdit;
     chkThemePreview: TCheckBox;
     chkCompletionProposalSearchOnMid: TCheckBox;
     lblLongSortRowNum: TLabel;
@@ -370,6 +374,8 @@ begin
   AppSettings.WriteString(asTheme, comboTheme.Text);
   AppSettings.WriteString(asIconPack, comboIconPack.Text);
   AppSettings.WriteString(asWebSearchBaseUrl, comboWebSearchBaseUrl.Text);
+  AppSettings.WriteString(asSqlMonitorUrl, editSqlMonitorUrl.Text);
+  AppSettings.WriteString(asSqlMonitorApiKey, editSqlMonitorApiKey.Text);
 
   AppSettings.WriteInt(asMaxQueryResults, updownMaxQueryResults.Position);
   // Save color settings
@@ -728,6 +734,8 @@ begin
   comboTheme.ItemIndex := comboTheme.Items.IndexOf(AppSettings.ReadString(asTheme));
   comboIconPack.ItemIndex := comboIconPack.Items.IndexOf(AppSettings.ReadString(asIconPack));
   comboWebSearchBaseUrl.Text := AppSettings.ReadString(asWebSearchBaseUrl);
+  editSqlMonitorUrl.Text := AppSettings.ReadString(asSqlMonitorUrl);
+  editSqlMonitorApiKey.Text := AppSettings.ReadString(asSqlMonitorApiKey);
 
   // Logging
   updownLogLines.Position := AppSettings.ReadInt(asLogsqlnum);

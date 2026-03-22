@@ -1,4 +1,4 @@
-program heidisql;
+﻿program heidisql;
 
 uses
   madExcept,
@@ -19,6 +19,7 @@ uses
   copytable in '..\..\source\copytable.pas' {CopyTableForm},
   insertfiles in '..\..\source\insertfiles.pas' {frmInsertFiles},
   apphelpers in '..\..\source\apphelpers.pas',
+  sqlmonitor in '..\..\source\sqlmonitor.pas',
   sqlhelp in '..\..\source\sqlhelp.pas' {frmSQLhelp},
   dbstructures in '..\..\source\dbstructures.pas',
   dbstructures.mysql in '..\..\source\dbstructures.mysql.pas',

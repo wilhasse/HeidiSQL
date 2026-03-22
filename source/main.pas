@@ -15,7 +15,7 @@ uses
   SynHighlighterSQL, Vcl.Tabs, SynUnicode, SynRegExpr, Vcl.ExtActns, System.IOUtils, System.Types, Vcl.Themes, System.Win.ComObj,
   Winapi.CommCtrl, System.Contnrs, System.Generics.Collections, System.Generics.Defaults, SynEditExport, SynExportHTML, SynExportRTF, System.Math, Vcl.ExtDlgs, System.Win.Registry, Vcl.AppEvnts,
   routine_editor, trigger_editor, event_editor, preferences, EditVar, apphelpers, createdatabase, table_editor,
-  TableTools, View, Usermanager, SelectDBObject, connections, sqlhelp, dbconnection,
+  TableTools, View, Usermanager, SelectDBObject, connections, sqlhelp, dbconnection, sqlmonitor,
   insertfiles, searchreplace, loaddata, copytable, csv_detector, Cromis.DirectoryWatch, SyncDB, gnugettext,
   VirtualTrees, VirtualTrees.HeaderPopup, VirtualTrees.Utils, VirtualTrees.Types,
   JumpList, System.Actions, System.UITypes, Vcl.Imaging.pngimage,
@@ -1295,6 +1295,8 @@ type
     function GetActiveConnection: TDBConnection;
     function GetActiveDatabase: String;
     function GetCurrentQuery(Tab: TQueryTab): String;
+    function BatchHasGuardedWrites(Batch: TSQLBatch): Boolean;
+    function PrepareSqlMonitorExecution(Connection: TDBConnection; Batch: TSQLBatch; out Context: TSqlMonitorExecutionContext): Boolean;
     procedure SetActiveDatabase(db: String; Connection: TDBConnection);
     procedure SetActiveDBObj(Obj: TDBObject);
     procedure ToggleFilterPanel(ForceVisible: Boolean = False);
@@ -3238,6 +3240,104 @@ begin
 end;
 
 
+function TMainForm.BatchHasGuardedWrites(Batch: TSQLBatch): Boolean;
+var
+  Query: TSQLSentence;
+  Command: String;
+begin
+  Result := False;
+  for Query in Batch do begin
+    Command := UpperCase(getFirstWord(Query.SQLWithoutComments));
+    if (Command = 'UPDATE') or (Command = 'DELETE') then begin
+      Result := True;
+      Break;
+    end;
+  end;
+end;
+
+
+function TMainForm.PrepareSqlMonitorExecution(Connection: TDBConnection; Batch: TSQLBatch;
+  out Context: TSqlMonitorExecutionContext): Boolean;
+var
+  Client: TSqlMonitorClient;
+  Response: TSqlMonitorBatchResponse;
+  StatementSql: TStringList;
+  Query: TSQLSentence;
+  HasGuardedWrites: Boolean;
+  DecisionMsg, RequestId: String;
+begin
+  Result := True;
+  Context := nil;
+  if not SqlMonitorShouldHandle(Connection) then
+    Exit;
+
+  StatementSql := TStringList.Create;
+  HasGuardedWrites := BatchHasGuardedWrites(Batch);
+  try
+    for Query in Batch do
+      StatementSql.Add(Query.SQL);
+
+    Client := TSqlMonitorClient.Create(Self);
+    try
+      Response := Client.CreateRequest(Connection, StatementSql);
+      try
+        if HasGuardedWrites then begin
+          if Response.Status = smbsPending then begin
+            RequestId := Response.RequestId;
+            if RequestId.IsEmpty then
+              raise ESqlMonitorError.Create(_('Central SQL approval request returned no request id.'));
+            ShowStatusMsg(_('Waiting for centralized SQL approval ...'));
+            Response.Free;
+            Response := nil;
+            Client.WaitForDecision(RequestId, Response);
+          end;
+
+          DecisionMsg := SqlMonitorGetDecisionMessage(Response);
+          if (Response.Status = smbsApproved) and (not Response.RequestId.IsEmpty) then
+            Context := TSqlMonitorExecutionContext.Create(Response.RequestId, StatementSql)
+          else begin
+            if DecisionMsg.IsEmpty then
+              DecisionMsg := _('Central SQL approval rejected this batch.');
+            LogSQL(_('SQL monitor blocked execution: ') + DecisionMsg, lcError, Connection);
+            ErrorDialog(_('Central SQL approval blocked execution'), DecisionMsg);
+            Result := False;
+          end;
+        end else begin
+          if (Response.Status in [smbsLogged, smbsApproved]) and (not Response.RequestId.IsEmpty) then
+            Context := TSqlMonitorExecutionContext.Create(Response.RequestId, StatementSql)
+          else if not (Response.Status in [smbsLogged, smbsApproved]) then begin
+            DecisionMsg := SqlMonitorGetDecisionMessage(Response);
+            if DecisionMsg.IsEmpty then
+              DecisionMsg := _('Central SQL logging is unavailable. Continuing without centralized logging.');
+            LogSQL(_('SQL monitor logging warning: ') + DecisionMsg, lcError);
+            ShowStatusMsg(_('Central SQL logging is unavailable. Continuing without centralized logging.'));
+          end;
+        end;
+      finally
+        Response.Free;
+      end;
+    finally
+      Client.Free;
+    end;
+  except
+    on E:Exception do begin
+      if HasGuardedWrites then begin
+        LogSQL(_('SQL monitor approval failed: ') + E.Message, lcError, Connection);
+        ErrorDialog(_('Central SQL approval failed'), E.Message);
+        Result := False;
+      end else begin
+        LogSQL(_('SQL monitor logging warning: ') + E.Message, lcError);
+        ShowStatusMsg(_('Central SQL logging is unavailable. Continuing without centralized logging.'));
+      end;
+    end;
+  end;
+
+  if not Result then
+    FreeAndNil(Context);
+  StatementSql.Free;
+end;
+
+
 procedure TMainForm.actExecuteQueryExecute(Sender: TObject);
 var
   ProfileNode: PVirtualNode;
@@ -3247,11 +3347,14 @@ var
   NewSQL, msg, Command, SQLNoComments, CurrentQuery: String;
   Query: TSQLSentence;
   rx: TRegExpr;
-  ContainsUnsafeQueries, DoExecute: Boolean;
+  ContainsUnsafeQueries, DoExecute, HasGuardedWrites, UseSqlMonitorForWrites: Boolean;
+  SqlMonitorContext: TSqlMonitorExecutionContext;
 begin
   Tab := QueryTabs.ActiveTab;
   OperationRunning(True);
   DoExecute := True;
+  Batch := nil;
+  SqlMonitorContext := nil;
 
   ShowStatusMsg(_('Splitting SQL queries ...'));
   Batch := TSQLBatch.Create(ActiveConnection.Parameters.NetTypeGroup);
@@ -3276,8 +3379,8 @@ begin
   // Check if there is bind parameters
   if (tab.ListBindParams.Count > 0) and DoExecute then begin
     NewSQL := Batch.SQL;
-	  // Replace all parameters by their values
-	  // by descending to avoid having problems with similar variables name (eg test & test1)
+    // Replace all parameters by their values
+    // by descending to avoid having problems with similar variables name (eg test & test1)
     for BindParam := tab.ListBindParams.Count-1 downto 0 do begin
       // Do the Replace only if there is a value
       if Length(tab.ListBindParams.Items[BindParam].Value)>0 then begin
@@ -3291,7 +3394,10 @@ begin
     Batch.SQL := NewSQL;
   end;
 
-  if AppSettings.ReadBool(asWarnUnsafeUpdates) and DoExecute then begin
+  HasGuardedWrites := DoExecute and BatchHasGuardedWrites(Batch);
+  UseSqlMonitorForWrites := HasGuardedWrites and SqlMonitorShouldHandle(ActiveConnection);
+
+  if AppSettings.ReadBool(asWarnUnsafeUpdates) and DoExecute and (not UseSqlMonitorForWrites) then begin
     ShowStatusMsg(_('Checking queries for unsafe UPDATEs/DELETEs ...'));
     rx := TRegExpr.Create;
     rx.ModifierI := True;
@@ -3312,34 +3418,49 @@ begin
     end;
   end;
 
+  if DoExecute then
+    DoExecute := PrepareSqlMonitorExecution(ActiveConnection, Batch, SqlMonitorContext);
 
   if DoExecute then begin
-    Screen.Cursor := crHourGlass;
-    EnableProgress(Batch.Count);
-    Tab.ResultTabs.Clear;
-    Tab.tabsetQuery.Tabs.Clear;
-    FreeAndNil(Tab.QueryProfile);
-    ProfileNode := FindNode(Tab.treeHelpers, TQueryTab.HelperNodeProfile, nil);
-    Tab.DoProfile := Assigned(ProfileNode) and (Tab.treeHelpers.CheckState[ProfileNode] in CheckedStates);
-    if Tab.DoProfile then try
-      ActiveConnection.Query('SET profiling=1');
-    except
-      on E:EDbError do begin
-        ErrorDialog(f_('Query profiling requires %s or later, and the server must not be configured with %s.', ['MySQL 5.0.37', '--disable-profiling']), E.Message);
-        Tab.DoProfile := False;
+    try
+      Screen.Cursor := crHourGlass;
+      EnableProgress(Batch.Count);
+      Tab.ResultTabs.Clear;
+      Tab.tabsetQuery.Tabs.Clear;
+      FreeAndNil(Tab.QueryProfile);
+      ProfileNode := FindNode(Tab.treeHelpers, TQueryTab.HelperNodeProfile, nil);
+      Tab.DoProfile := Assigned(ProfileNode) and (Tab.treeHelpers.CheckState[ProfileNode] in CheckedStates);
+      if Tab.DoProfile then try
+        ActiveConnection.Query('SET profiling=1');
+      except
+        on E:EDbError do begin
+          ErrorDialog(f_('Query profiling requires %s or later, and the server must not be configured with %s.', ['MySQL 5.0.37', '--disable-profiling']), E.Message);
+          Tab.DoProfile := False;
+        end;
       end;
-    end;
 
-    // Start the execution thread
-    Screen.Cursor := crAppStart;
-    ActiveConnection.Ping(True); // Prevents SynEdit paint exceptions if connection was killed outside
-    Tab.QueryRunning := True;
-    Tab.ExecutionThread := TQueryThread.Create(ActiveConnection, Batch, Tab.Number);
+      // Start the execution thread
+      Screen.Cursor := crAppStart;
+      ActiveConnection.Ping(True); // Prevents SynEdit paint exceptions if connection was killed outside
+      Tab.QueryRunning := True;
+      Tab.ExecutionThread := TQueryThread.Create(ActiveConnection, Batch, Tab.Number, SqlMonitorContext);
+      Batch := nil;
+      SqlMonitorContext := nil;
+    except
+      FreeAndNil(SqlMonitorContext);
+      FreeAndNil(Batch);
+      raise;
+    end;
+  end else begin
+    FreeAndNil(SqlMonitorContext);
+    FreeAndNil(Batch);
+    OperationRunning(False);
+    Screen.Cursor := crDefault;
+    ShowStatusMsg;
   end;
 
   ValidateQueryControls(Sender);
 end;
-
 
 
 procedure TMainForm.BeforeQueryExecution(Thread: TQueryThread);

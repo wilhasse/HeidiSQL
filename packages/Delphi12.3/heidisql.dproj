@@ -177,6 +177,7 @@
             <Form>frmInsertFiles</Form>
         </DCCReference>
         <DCCReference Include="..\..\source\apphelpers.pas"/>
+        <DCCReference Include="..\..\source\sqlmonitor.pas"/>
         <DCCReference Include="..\..\source\sqlhelp.pas">
             <Form>frmSQLhelp</Form>
         </DCCReference>

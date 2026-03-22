@@ -1,4 +1,4 @@
-object frmPreferences: TfrmPreferences
+﻿object frmPreferences: TfrmPreferences
   Left = 547
   Top = 163
   BorderIcons = [biSystemMenu]
@@ -325,6 +325,41 @@ object frmPreferences: TfrmPreferences
           'https://yandex.com/search/?text=%query'
           'https://www.bing.com/search?q=%query'
           'https://www.google.com/search?q=%query')
+      end
+      object lblSqlMonitorUrl: TLabel
+        Left = 8
+        Top = 366
+        Width = 108
+        Height = 14
+        Caption = 'SQL monitor API url:'
+      end
+      object lblSqlMonitorApiKey: TLabel
+        Left = 8
+        Top = 387
+        Width = 108
+        Height = 14
+        Caption = 'SQL monitor API key:'
+      end
+      object editSqlMonitorUrl: TEdit
+        Left = 220
+        Top = 363
+        Width = 451
+        Height = 22
+        Anchors = [akLeft, akTop, akRight]
+        TabOrder = 20
+        TextHint = 'http://host:5000'
+        OnChange = Modified
+      end
+      object editSqlMonitorApiKey: TEdit
+        Left = 220
+        Top = 384
+        Width = 451
+        Height = 22
+        Anchors = [akLeft, akTop, akRight]
+        PasswordChar = '*'
+        TabOrder = 21
+        TextHint = 'Central SQL monitor API key'
+        OnChange = Modified
       end
       object chkThemePreview: TCheckBox
         Left = 564
