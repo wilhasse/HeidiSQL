@@ -74,6 +74,7 @@ type
     FOwner: TComponent;
     function BuildSessionPayload(Connection: TDBConnection; const DatabaseName: String): String;
     function BuildTargetJson(Connection: TDBConnection; const DatabaseName: String): TJSONObject;
+    function BuildExecutionPayload(Connection: TDBConnection; const SQL: String; DurationMs: Cardinal; RowsAffected, RowsFound: Int64; Success: Boolean; const ErrorMessage: String): String;
     function BuildRequestPayload(Connection: TDBConnection; StatementSql: TStrings): String;
     function ParseBatchResponse(const JsonText: String): TSqlMonitorBatchResponse;
     function SendJsonRequest(const URL, Method, Payload: String; out ResponseText: String;
@@ -98,6 +99,7 @@ type
 function SqlMonitorShouldHandle(Connection: TDBConnection): Boolean;
 function SqlMonitorGetDecisionMessage(Response: TSqlMonitorBatchResponse): String;
 function SqlMonitorTranslate(const MsgId: String): String;
+procedure SqlMonitorLogExecutedStatement(Connection: TDBConnection; const SQL: String; DurationMs: Cardinal; RowsAffected, RowsFound: Int64);
 procedure SqlMonitorRegisterSession(Connection: TDBConnection; const DatabaseName: String='');
 procedure SqlMonitorForgetConnection(Connection: TDBConnection);
 procedure SqlMonitorShowError(const Title, Msg: String);
@@ -496,6 +498,45 @@ begin
 end;
 
 
+procedure SqlMonitorLogExecutedStatement(Connection: TDBConnection; const SQL: String; DurationMs: Cardinal; RowsAffected, RowsFound: Int64);
+var
+  Client: TSqlMonitorClient;
+  Payload, Url: String;
+  TimeoutSeconds: Cardinal;
+begin
+  if not TSqlMonitorClient.SupportsConnection(Connection) then
+    Exit;
+  if SQL.Trim.IsEmpty then
+    Exit;
+
+  Client := TSqlMonitorClient.Create(nil);
+  try
+    Url := TSqlMonitorClient.BaseUrl + '/v1/sql-executions';
+    TimeoutSeconds := TSqlMonitorClient.SessionTimeoutSeconds;
+    Payload := Client.BuildExecutionPayload(Connection, SQL, DurationMs, RowsAffected, RowsFound, True, '');
+  finally
+    Client.Free;
+  end;
+
+  TThread.CreateAnonymousThread(
+    procedure
+    var
+      BackgroundClient: TSqlMonitorClient;
+      ResponseText: String;
+    begin
+      BackgroundClient := TSqlMonitorClient.Create(nil);
+      try
+        try
+          BackgroundClient.SendJsonRequest(Url, 'POST', Payload, ResponseText, TimeoutSeconds);
+        except
+        end;
+      finally
+        BackgroundClient.Free;
+      end;
+    end
+  ).Start;
+end;
+
 procedure SqlMonitorRegisterSession(Connection: TDBConnection; const DatabaseName: String='');
 var
   ConnectionKey: NativeUInt;
@@ -742,6 +783,39 @@ begin
     RootJson.AddPair('client_host', GetClientHostName);
     RootJson.AddPair('client_version', GetClientVersion);
     RootJson.AddPair('target', BuildTargetJson(Connection, DatabaseName));
+    Result := RootJson.ToJSON;
+  finally
+    RootJson.Free;
+  end;
+end;
+
+
+function TSqlMonitorClient.BuildExecutionPayload(Connection: TDBConnection; const SQL: String; DurationMs: Cardinal; RowsAffected, RowsFound: Int64; Success: Boolean; const ErrorMessage: String): String;
+var
+  RootJson, StatementJson: TJSONObject;
+  StatementsJson: TJSONArray;
+begin
+  RootJson := TJSONObject.Create;
+  try
+    RootJson.AddPair('client_app', APPNAME);
+    RootJson.AddPair('client_version', GetClientVersion);
+    RootJson.AddPair('actor_id', GetClientActorId);
+    RootJson.AddPair('client_host', GetClientHostName);
+    RootJson.AddPair('target', BuildTargetJson(Connection, ''));
+    RootJson.AddPair('total_duration_ms', TJSONNumber.Create(DurationMs));
+
+    StatementsJson := TJSONArray.Create;
+    StatementJson := TJSONObject.Create;
+    StatementJson.AddPair('index', TJSONNumber.Create(0));
+    StatementJson.AddPair('sql', SQL);
+    StatementJson.AddPair('executed', TJSONBool.Create(True));
+    StatementJson.AddPair('success', TJSONBool.Create(Success));
+    StatementJson.AddPair('duration_ms', TJSONNumber.Create(DurationMs));
+    StatementJson.AddPair('rows_affected', TJSONNumber.Create(RowsAffected));
+    StatementJson.AddPair('rows_found', TJSONNumber.Create(RowsFound));
+    StatementJson.AddPair('error_message', ErrorMessage);
+    StatementsJson.AddElement(StatementJson);
+    RootJson.AddPair('statements', StatementsJson);
     Result := RootJson.ToJSON;
   finally
     RootJson.Free;

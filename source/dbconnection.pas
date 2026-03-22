@@ -1007,7 +1007,7 @@ exports
 
 implementation
 
-uses apphelpers, loginform, change_password;
+uses apphelpers, loginform, change_password, sqlmonitor;
 
 
 
@@ -9416,7 +9416,8 @@ procedure TDBQuery.DeleteRow;
 var
   sql: String;
   IsVirtual: Boolean;
-  TempRowsAffected: Int64;
+  TempRowsAffected, ExecutedRowsAffected, ExecutedRowsFound: Int64;
+  ExecutedDurationMs: Cardinal;
 begin
   // Delete current row from result
   PrepareEditing;
@@ -9424,10 +9425,14 @@ begin
   if not IsVirtual then begin
     sql := GridQuery('DELETE', 'FROM ' + QuotedDbAndTableName + ' WHERE ' + GetWhereClause);
     Connection.Query(sql);
-    TempRowsAffected := Connection.RowsAffected;
+    ExecutedDurationMs := Connection.LastQueryDuration + Connection.LastQueryNetworkDuration;
+    ExecutedRowsAffected := Connection.RowsAffected;
+    ExecutedRowsFound := Connection.RowsFound;
+    TempRowsAffected := ExecutedRowsAffected;
     Connection.ShowWarnings;
     if TempRowsAffected = 0 then
       raise EDbError.Create(FormatNumber(TempRowsAffected)+' rows deleted when that should have been 1.');
+    SqlMonitorLogExecutedStatement(Connection, sql, ExecutedDurationMs, ExecutedRowsAffected, ExecutedRowsFound);
   end;
   if Assigned(FCurrentUpdateRow) then begin
     FUpdateData.Remove(FCurrentUpdateRow);
@@ -9623,10 +9628,11 @@ end;
 function TDBQuery.SaveModifications: Boolean;
 var
   i: Integer;
-  TempRowsAffected: Int64;
+  TempRowsAffected, ExecutedRowsAffected, ExecutedRowsFound: Int64;
+  ExecutedDurationMs: Cardinal;
   Row: TGridRow;
   Cell: TGridValue;
-  sqlUpdate, sqlInsertColumns, sqlInsertValues, Val: String;
+  sqlUpdate, sqlInsertColumns, sqlInsertValues, Val, ExecutedSql: String;
   RowModified: Boolean;
   ColAttr: TTableColumn;
 begin
@@ -9673,8 +9679,13 @@ begin
     // Post query and fetch just inserted auto-increment id if applicable
     if RowModified then try
       if Row.Inserted then begin
-        Connection.Query('INSERT INTO '+QuotedDbAndTableName+' ('+sqlInsertColumns+') VALUES ('+sqlInsertValues+')');
+        ExecutedSql := 'INSERT INTO '+QuotedDbAndTableName+' ('+sqlInsertColumns+') VALUES ('+sqlInsertValues+')';
+        Connection.Query(ExecutedSql);
+        ExecutedDurationMs := Connection.LastQueryDuration + Connection.LastQueryNetworkDuration;
+        ExecutedRowsAffected := Connection.RowsAffected;
+        ExecutedRowsFound := Connection.RowsFound;
         Connection.ShowWarnings;
+        SqlMonitorLogExecutedStatement(Connection, ExecutedSql, ExecutedDurationMs, ExecutedRowsAffected, ExecutedRowsFound);
         for i:=0 to ColumnCount-1 do begin
           ColAttr := ColAttributes(i);
           if Assigned(ColAttr) and (ColAttr.DefaultType = cdtAutoInc) then begin
@@ -9689,12 +9700,17 @@ begin
         sqlUpdate := QuotedDbAndTableName+' SET '+sqlUpdate+' WHERE '+GetWhereClause;
         sqlUpdate := GridQuery('UPDATE', sqlUpdate);
         Connection.Query(sqlUpdate);
-        TempRowsAffected := Connection.RowsAffected;
+        ExecutedSql := sqlUpdate;
+        ExecutedDurationMs := Connection.LastQueryDuration + Connection.LastQueryNetworkDuration;
+        ExecutedRowsAffected := Connection.RowsAffected;
+        ExecutedRowsFound := Connection.RowsFound;
+        TempRowsAffected := ExecutedRowsAffected;
         Connection.ShowWarnings;
         if TempRowsAffected = 0 then begin
           raise EDbError.Create(FormatNumber(TempRowsAffected)+' rows updated when that should have been 1.');
           Result := False;
         end;
+        SqlMonitorLogExecutedStatement(Connection, ExecutedSql, ExecutedDurationMs, ExecutedRowsAffected, ExecutedRowsFound);
       end;
       // Reset modification flags
       for i:=0 to ColumnCount-1 do begin
