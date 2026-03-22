@@ -17,4 +17,5 @@ __recovery
 *.mo
 *.po
 *.res
+build.bat
 out/Backups/*
