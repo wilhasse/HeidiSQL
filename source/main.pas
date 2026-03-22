@@ -2676,6 +2676,8 @@ begin
   // Connection removed or added
   case Action of
     cnRemoved, cnExtracted: begin
+      SqlMonitorForgetConnection(Item);
+
       // Post pending UPDATE and release current table with result
       Results := GridResult(DataGrid);
       if Assigned(Results) then begin
@@ -10221,11 +10223,14 @@ begin
   // Manually trigger changed focused tree node, to display the right server vendor
   // and version. Also required on reconnects.
   DBtree.OnFocusChanged(DBtree, DBtree.FocusedNode, DBtree.FocusedColumn);
+SqlMonitorRegisterSession(Connection, Database);
 end;
 
 
 procedure TMainForm.DatabaseChanged(Connection: TDBConnection; Database: String);
 begin
+  SqlMonitorRegisterSession(Connection, Database);
+
   // Immediately force db icons to repaint, so the user sees the active db state
   DBtree.Repaint;
 

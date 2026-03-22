@@ -72,26 +72,33 @@ type
   TSqlMonitorClient = class(TObject)
   private
     FOwner: TComponent;
+    function BuildSessionPayload(Connection: TDBConnection; const DatabaseName: String): String;
+    function BuildTargetJson(Connection: TDBConnection; const DatabaseName: String): TJSONObject;
     function BuildRequestPayload(Connection: TDBConnection; StatementSql: TStrings): String;
     function ParseBatchResponse(const JsonText: String): TSqlMonitorBatchResponse;
-    function SendJsonRequest(const URL, Method, Payload: String; out ResponseText: String): Integer;
+    function SendJsonRequest(const URL, Method, Payload: String; out ResponseText: String;
+      TimeOutSeconds: Cardinal=0): Integer;
   public
     constructor Create(AOwner: TComponent);
     class function ApprovalTimeoutMs: Cardinal; static;
     class function BaseUrl: String; static;
     class function IsConfigured: Boolean; static;
     class function PollIntervalMs: Cardinal; static;
+    class function SessionTimeoutSeconds: Cardinal; static;
     class function SupportsConnection(Connection: TDBConnection): Boolean; static;
     class function TryGetSettingInt(const Name: String; DefaultValue: Integer): Integer; static;
     function CancelRequest(const RequestId: String): Boolean;
     function CompleteRequest(Connection: TDBConnection; Context: TSqlMonitorExecutionContext; TotalDurationMs: Cardinal): Boolean;
     function CreateRequest(Connection: TDBConnection; StatementSql: TStrings): TSqlMonitorBatchResponse;
     function GetRequestStatus(const RequestId: String): TSqlMonitorBatchResponse;
+    function RegisterSession(Connection: TDBConnection; const DatabaseName: String): Boolean;
     function WaitForDecision(const RequestId: String; out Response: TSqlMonitorBatchResponse): Boolean;
   end;
 
 function SqlMonitorShouldHandle(Connection: TDBConnection): Boolean;
 function SqlMonitorGetDecisionMessage(Response: TSqlMonitorBatchResponse): String;
+procedure SqlMonitorRegisterSession(Connection: TDBConnection; const DatabaseName: String='');
+procedure SqlMonitorForgetConnection(Connection: TDBConnection);
 
 implementation
 
@@ -107,6 +114,10 @@ type
     Cancelled: Boolean;
     procedure HandleCancel(Sender: TObject);
   end;
+
+var
+  SessionRegistrations: TDictionary<NativeUInt, String>;
+  SessionRegistrationsLock: TObject;
 
 function BatchStatusFromString(const Value: String): TSqlMonitorBatchStatus;
 begin
@@ -137,6 +148,25 @@ begin
     SetLength(Result, BufferSize)
   else
     Result := '';
+end;
+
+
+function ResolveTargetDatabase(Connection: TDBConnection; const DatabaseName: String): String;
+var
+  Databases: TStringList;
+begin
+  Result := Trim(DatabaseName);
+  if Result.IsEmpty and Assigned(Connection) then
+    Result := Trim(Connection.Database);
+  if Result.IsEmpty and Assigned(Connection) then begin
+    Databases := Connection.Parameters.AllDatabasesList;
+    try
+      if Databases.Count = 1 then
+        Result := Trim(Databases[0]);
+    finally
+      Databases.Free;
+    end;
+  end;
 end;
 
 
@@ -279,6 +309,21 @@ begin
 end;
 
 
+procedure ReleaseSessionRegistration(ConnectionKey: NativeUInt; const DatabaseName: String);
+var
+  RegisteredDatabase: String;
+begin
+  System.TMonitor.Enter(SessionRegistrationsLock);
+  try
+    if SessionRegistrations.TryGetValue(ConnectionKey, RegisteredDatabase)
+      and SameText(RegisteredDatabase, DatabaseName) then
+      SessionRegistrations.Remove(ConnectionKey);
+  finally
+    System.TMonitor.Exit(SessionRegistrationsLock);
+  end;
+end;
+
+
 function ParseApiErrorMessage(const ResponseText: String): String;
 var
   RootValue: TJSONValue;
@@ -319,6 +364,72 @@ end;
 function SqlMonitorShouldHandle(Connection: TDBConnection): Boolean;
 begin
   Result := TSqlMonitorClient.SupportsConnection(Connection);
+end;
+
+
+procedure SqlMonitorForgetConnection(Connection: TDBConnection);
+begin
+  if Connection = nil then
+    Exit;
+  System.TMonitor.Enter(SessionRegistrationsLock);
+  try
+    SessionRegistrations.Remove(NativeUInt(Connection));
+  finally
+    System.TMonitor.Exit(SessionRegistrationsLock);
+  end;
+end;
+
+
+procedure SqlMonitorRegisterSession(Connection: TDBConnection; const DatabaseName: String='');
+var
+  ConnectionKey: NativeUInt;
+  EffectiveDatabase, LastDatabase, Payload: String;
+  Client: TSqlMonitorClient;
+begin
+  if not TSqlMonitorClient.SupportsConnection(Connection) then
+    Exit;
+
+  EffectiveDatabase := ResolveTargetDatabase(Connection, DatabaseName);
+  if EffectiveDatabase.IsEmpty then
+    Exit;
+
+  ConnectionKey := NativeUInt(Connection);
+  System.TMonitor.Enter(SessionRegistrationsLock);
+  try
+    if SessionRegistrations.TryGetValue(ConnectionKey, LastDatabase)
+      and SameText(LastDatabase, EffectiveDatabase) then
+      Exit;
+    SessionRegistrations.AddOrSetValue(ConnectionKey, EffectiveDatabase);
+  finally
+    System.TMonitor.Exit(SessionRegistrationsLock);
+  end;
+
+  Client := TSqlMonitorClient.Create(nil);
+  try
+    Payload := Client.BuildSessionPayload(Connection, EffectiveDatabase);
+  finally
+    Client.Free;
+  end;
+
+  TThread.CreateAnonymousThread(
+    procedure
+    var
+      BackgroundClient: TSqlMonitorClient;
+      ResponseText: String;
+    begin
+      BackgroundClient := TSqlMonitorClient.Create(nil);
+      try
+        try
+          BackgroundClient.SendJsonRequest(TSqlMonitorClient.BaseUrl + '/v1/sessions', 'POST', Payload,
+            ResponseText, TSqlMonitorClient.SessionTimeoutSeconds);
+        except
+          ReleaseSessionRegistration(ConnectionKey, EffectiveDatabase);
+        end;
+      finally
+        BackgroundClient.Free;
+      end;
+    end
+  ).Start;
 end;
 
 
@@ -477,6 +588,12 @@ begin
 end;
 
 
+class function TSqlMonitorClient.SessionTimeoutSeconds: Cardinal;
+begin
+  Result := Max(1, TryGetSettingInt('HEIDISQL_SQLMONITOR_SESSION_TIMEOUT_SECONDS', 5));
+end;
+
+
 class function TSqlMonitorClient.SupportsConnection(Connection: TDBConnection): Boolean;
 begin
   Result := IsConfigured and Assigned(Connection) and Connection.Parameters.IsAnyMySQL;
@@ -489,9 +606,36 @@ begin
 end;
 
 
+function TSqlMonitorClient.BuildTargetJson(Connection: TDBConnection; const DatabaseName: String): TJSONObject;
+begin
+  Result := TJSONObject.Create;
+  Result.AddPair('host', Connection.Parameters.Hostname);
+  Result.AddPair('port', TJSONNumber.Create(GetConnectionTargetPort(Connection)));
+  Result.AddPair('database', ResolveTargetDatabase(Connection, DatabaseName));
+  Result.AddPair('db_user', Connection.Parameters.Username);
+end;
+
+
+function TSqlMonitorClient.BuildSessionPayload(Connection: TDBConnection; const DatabaseName: String): String;
+var
+  RootJson: TJSONObject;
+begin
+  RootJson := TJSONObject.Create;
+  try
+    RootJson.AddPair('actor_id', GetClientActorId);
+    RootJson.AddPair('client_host', GetClientHostName);
+    RootJson.AddPair('client_version', GetClientVersion);
+    RootJson.AddPair('target', BuildTargetJson(Connection, DatabaseName));
+    Result := RootJson.ToJSON;
+  finally
+    RootJson.Free;
+  end;
+end;
+
+
 function TSqlMonitorClient.BuildRequestPayload(Connection: TDBConnection; StatementSql: TStrings): String;
 var
-  RootJson, TargetJson, StatementJson: TJSONObject;
+  RootJson, StatementJson: TJSONObject;
   StatementsJson: TJSONArray;
   i: Integer;
 begin
@@ -501,13 +645,7 @@ begin
     RootJson.AddPair('client_version', GetClientVersion);
     RootJson.AddPair('actor_id', GetClientActorId);
     RootJson.AddPair('client_host', GetClientHostName);
-
-    TargetJson := TJSONObject.Create;
-    TargetJson.AddPair('host', Connection.Parameters.Hostname);
-    TargetJson.AddPair('port', TJSONNumber.Create(GetConnectionTargetPort(Connection)));
-    TargetJson.AddPair('database', Connection.Database);
-    TargetJson.AddPair('db_user', Connection.Parameters.Username);
-    RootJson.AddPair('target', TargetJson);
+    RootJson.AddPair('target', BuildTargetJson(Connection, ''));
 
     StatementsJson := TJSONArray.Create;
     if StatementSql <> nil then begin
@@ -609,6 +747,17 @@ begin
 end;
 
 
+function TSqlMonitorClient.RegisterSession(Connection: TDBConnection; const DatabaseName: String): Boolean;
+var
+  ResponseText: String;
+  StatusCode: Integer;
+begin
+  StatusCode := SendJsonRequest(BaseUrl + '/v1/sessions', 'POST', BuildSessionPayload(Connection, DatabaseName),
+    ResponseText, SessionTimeoutSeconds);
+  Result := StatusCode in [200, 201, 202, 204];
+end;
+
+
 function TSqlMonitorClient.ParseBatchResponse(const JsonText: String): TSqlMonitorBatchResponse;
 var
   RootValue, StatementsValue, ItemValue: TJSONValue;
@@ -656,16 +805,22 @@ begin
 end;
 
 
-function TSqlMonitorClient.SendJsonRequest(const URL, Method, Payload: String; out ResponseText: String): Integer;
+function TSqlMonitorClient.SendJsonRequest(const URL, Method, Payload: String; out ResponseText: String;
+  TimeOutSeconds: Cardinal=0): Integer;
 var
   Http: THttpDownload;
   StatusText: String;
+  EffectiveTimeOut: Cardinal;
 begin
   Http := THttpDownload.Create(FOwner);
   try
     Http.URL := URL;
     Http.Method := Method;
-    Http.TimeOut := Max(10, ApprovalTimeoutMs div 1000);
+    if TimeOutSeconds > 0 then
+      EffectiveTimeOut := TimeOutSeconds
+    else
+      EffectiveTimeOut := Max(10, ApprovalTimeoutMs div 1000);
+    Http.TimeOut := EffectiveTimeOut;
     Http.RequestHeaders.Values['Content-Type'] := 'application/json; charset=utf-8';
     Http.RequestHeaders.Values['Accept'] := 'application/json';
     Http.RequestHeaders.Values['X-API-Key'] := GetSqlMonitorApiKey;
@@ -808,5 +963,13 @@ procedure TSqlMonitorWaitState.HandleCancel(Sender: TObject);
 begin
   Cancelled := True;
 end;
+
+initialization
+  SessionRegistrations := TDictionary<NativeUInt, String>.Create;
+  SessionRegistrationsLock := TObject.Create;
+
+finalization
+  SessionRegistrations.Free;
+  SessionRegistrationsLock.Free;
 
 end.
