@@ -97,13 +97,15 @@ type
 
 function SqlMonitorShouldHandle(Connection: TDBConnection): Boolean;
 function SqlMonitorGetDecisionMessage(Response: TSqlMonitorBatchResponse): String;
+function SqlMonitorTranslate(const MsgId: String): String;
 procedure SqlMonitorRegisterSession(Connection: TDBConnection; const DatabaseName: String='');
 procedure SqlMonitorForgetConnection(Connection: TDBConnection);
+procedure SqlMonitorShowError(const Title, Msg: String);
 
 implementation
 
 uses
-  System.Math, Vcl.Controls, Vcl.StdCtrls,
+  System.Math, Vcl.Controls, Vcl.StdCtrls, Vcl.Dialogs,
   apphelpers, gnugettext, Main;
 
 {$I const.inc}
@@ -118,6 +120,60 @@ type
 var
   SessionRegistrations: TDictionary<NativeUInt, String>;
   SessionRegistrationsLock: TObject;
+
+function SqlMonitorTranslate(const MsgId: String): String;
+var
+  LangCode: String;
+begin
+  Result := _(MsgId);
+  if Result <> MsgId then
+    Exit;
+
+  LangCode := LowerCase(GetCurrentLanguageCode);
+  if (LangCode <> 'pt') and (LangCode <> 'pt_br') then
+    Exit;
+
+  if SameText(MsgId, 'Central SQL monitor') then
+    Result := 'Monitor SQL centralizado'
+  else if SameText(MsgId, 'SQL monitor completion callback failed: ') then
+    Result := 'Falha no callback de conclusao do monitor SQL: '
+  else if SameText(MsgId, 'SQL monitor returned an invalid JSON payload.') then
+    Result := 'O monitor SQL retornou um JSON invalido.'
+  else if SameText(MsgId, 'Waiting for SQL approval') then
+    Result := 'Aguardando aprovacao SQL'
+  else if SameText(MsgId, 'Submitting SQL approval request ...') then
+    Result := 'Enviando solicitacao de aprovacao SQL ...'
+  else if SameText(MsgId, 'The SQL statement will only run after centralized approval succeeds.') then
+    Result := 'A instrucao SQL so sera executada apos a aprovacao centralizada.'
+  else if SameText(MsgId, 'Central SQL approval timed out.') then
+    Result := 'A aprovacao SQL centralizada excedeu o tempo limite.'
+  else if SameText(MsgId, 'Waiting for centralized SQL approval ...') then
+    Result := 'Aguardando aprovacao SQL centralizada ...'
+  else if SameText(MsgId, 'Waiting for centralized SQL approval ... (%d s)') then
+    Result := 'Aguardando aprovacao SQL centralizada ... (%d s)'
+  else if SameText(MsgId, 'Last polling error: ') then
+    Result := 'Ultimo erro de consulta: '
+  else if SameText(MsgId, 'SQL monitor cancel warning: ') then
+    Result := 'Aviso ao cancelar no monitor SQL: '
+  else if SameText(MsgId, 'Central SQL approval was cancelled by the user.') then
+    Result := 'A aprovacao SQL centralizada foi cancelada pelo usuario.'
+  else if SameText(MsgId, 'Central SQL approval request returned no request id.') then
+    Result := 'A solicitacao de aprovacao SQL centralizada nao retornou request id.'
+  else if SameText(MsgId, 'Central SQL approval rejected this batch.') then
+    Result := 'A aprovacao SQL centralizada rejeitou este lote.'
+  else if SameText(MsgId, 'SQL monitor blocked execution: ') then
+    Result := 'Monitor SQL bloqueou a execucao: '
+  else if SameText(MsgId, 'Central SQL approval blocked execution') then
+    Result := 'Aprovacao SQL centralizada bloqueou a execucao'
+  else if SameText(MsgId, 'Central SQL logging is unavailable. Continuing without centralized logging.') then
+    Result := 'O log SQL centralizado esta indisponivel. Continuando sem log centralizado.'
+  else if SameText(MsgId, 'SQL monitor logging warning: ') then
+    Result := 'Aviso de log do monitor SQL: '
+  else if SameText(MsgId, 'SQL monitor approval failed: ') then
+    Result := 'Falha na aprovacao do monitor SQL: '
+  else if SameText(MsgId, 'Central SQL approval failed') then
+    Result := 'Falha na aprovacao SQL centralizada';
+end;
 
 function BatchStatusFromString(const Value: String): TSqlMonitorBatchStatus;
 begin
@@ -376,6 +432,66 @@ begin
     SessionRegistrations.Remove(NativeUInt(Connection));
   finally
     System.TMonitor.Exit(SessionRegistrationsLock);
+  end;
+end;
+
+
+procedure SqlMonitorShowError(const Title, Msg: String);
+var
+  Dialog: TForm;
+  MessageMemo: TMemo;
+  OkButton: TButton;
+  CaptionText: String;
+begin
+  if Msg.Trim.IsEmpty then begin
+    ErrorDialog(Title, Msg);
+    Exit;
+  end;
+
+  CaptionText := Title;
+  if CaptionText.IsEmpty then
+    CaptionText := SqlMonitorTranslate('Central SQL monitor');
+
+  Dialog := TForm.CreateNew(MainForm);
+  try
+    Dialog.Caption := CaptionText;
+    Dialog.BorderStyle := bsSizeable;
+    Dialog.Position := poMainFormCenter;
+    Dialog.Width := 760;
+    Dialog.Height := 420;
+    Dialog.Constraints.MinWidth := 540;
+    Dialog.Constraints.MinHeight := 280;
+    Dialog.BorderIcons := [biSystemMenu, biMaximize];
+
+    MessageMemo := TMemo.Create(Dialog);
+    MessageMemo.Parent := Dialog;
+    MessageMemo.Left := 16;
+    MessageMemo.Top := 16;
+    MessageMemo.Width := Dialog.ClientWidth - 32;
+    MessageMemo.Height := Dialog.ClientHeight - 78;
+    MessageMemo.Anchors := [akLeft, akTop, akRight, akBottom];
+    MessageMemo.ReadOnly := True;
+    MessageMemo.ScrollBars := ssVertical;
+    MessageMemo.WordWrap := True;
+    MessageMemo.WantReturns := False;
+    MessageMemo.Lines.Text := Msg;
+
+    OkButton := TButton.Create(Dialog);
+    OkButton.Parent := Dialog;
+    OkButton.Width := 90;
+    OkButton.Height := 30;
+    OkButton.Left := Dialog.ClientWidth - OkButton.Width - 16;
+    OkButton.Top := Dialog.ClientHeight - OkButton.Height - 12;
+    OkButton.Anchors := [akRight, akBottom];
+    OkButton.Caption := _('OK');
+    OkButton.Default := True;
+    OkButton.Cancel := True;
+    OkButton.ModalResult := mrOk;
+
+    Dialog.ActiveControl := MessageMemo;
+    Dialog.ShowModal;
+  finally
+    Dialog.Free;
   end;
 end;
 
@@ -721,7 +837,7 @@ begin
     except
       on E:Exception do begin
         if Retries = 3 then
-          raise ESqlMonitorError.Create(_('SQL monitor completion callback failed: ') + E.Message);
+          raise ESqlMonitorError.Create(SqlMonitorTranslate('SQL monitor completion callback failed: ') + E.Message);
         Sleep(250 * Retries);
       end;
     end;
@@ -844,7 +960,8 @@ end;
 function TSqlMonitorClient.WaitForDecision(const RequestId: String; out Response: TSqlMonitorBatchResponse): Boolean;
 var
   Dialog: TForm;
-  StatusLabel, HintLabel: TLabel;
+  StatusLabel: TLabel;
+  HintMemo: TMemo;
   CancelButton: TButton;
   WaitState: TSqlMonitorWaitState;
   StartTick, NextPoll, ElapsedSeconds: Cardinal;
@@ -857,12 +974,14 @@ begin
   OwnerWasEnabled := False;
   Dialog := TForm.CreateNew(MainForm);
   try
-    Dialog.Caption := _('Waiting for SQL approval');
-    Dialog.BorderStyle := bsDialog;
+    Dialog.Caption := SqlMonitorTranslate('Waiting for SQL approval');
+    Dialog.BorderStyle := bsSizeable;
     Dialog.Position := poMainFormCenter;
-    Dialog.Width := 430;
-    Dialog.Height := 165;
-    Dialog.BorderIcons := [];
+    Dialog.Width := 620;
+    Dialog.Height := 280;
+    Dialog.Constraints.MinWidth := 520;
+    Dialog.Constraints.MinHeight := 220;
+    Dialog.BorderIcons := [biSystemMenu, biMaximize];
 
     StatusLabel := TLabel.Create(Dialog);
     StatusLabel.Parent := Dialog;
@@ -870,15 +989,20 @@ begin
     StatusLabel.Top := 16;
     StatusLabel.Width := Dialog.ClientWidth - 32;
     StatusLabel.WordWrap := True;
-    StatusLabel.Caption := _('Submitting SQL approval request ...');
+    StatusLabel.Caption := SqlMonitorTranslate('Submitting SQL approval request ...');
 
-    HintLabel := TLabel.Create(Dialog);
-    HintLabel.Parent := Dialog;
-    HintLabel.Left := 16;
-    HintLabel.Top := 72;
-    HintLabel.Width := Dialog.ClientWidth - 32;
-    HintLabel.WordWrap := True;
-    HintLabel.Caption := _('The SQL statement will only run after centralized approval succeeds.');
+    HintMemo := TMemo.Create(Dialog);
+    HintMemo.Parent := Dialog;
+    HintMemo.Left := 16;
+    HintMemo.Top := 56;
+    HintMemo.Width := Dialog.ClientWidth - 32;
+    HintMemo.Height := Dialog.ClientHeight - 112;
+    HintMemo.Anchors := [akLeft, akTop, akRight, akBottom];
+    HintMemo.ReadOnly := True;
+    HintMemo.ScrollBars := ssVertical;
+    HintMemo.WordWrap := True;
+    HintMemo.TabStop := False;
+    HintMemo.Lines.Text := SqlMonitorTranslate('The SQL statement will only run after centralized approval succeeds.');
 
     CancelButton := TButton.Create(Dialog);
     CancelButton.Parent := Dialog;
@@ -902,7 +1026,7 @@ begin
         Response := TSqlMonitorBatchResponse.Create;
         Response.RequestId := RequestId;
         Response.Status := smbsError;
-        Response.ErrorMessage := _('Central SQL approval timed out.');
+        Response.ErrorMessage := SqlMonitorTranslate('Central SQL approval timed out.');
         Break;
       end;
 
@@ -923,11 +1047,11 @@ begin
       end;
 
       ElapsedSeconds := (GetTickCount - StartTick) div 1000;
-      StatusLabel.Caption := f_('Waiting for centralized SQL approval ... (%d s)', [ElapsedSeconds]);
+      StatusLabel.Caption := Format(SqlMonitorTranslate('Waiting for centralized SQL approval ... (%d s)'), [ElapsedSeconds]);
       if LastError.IsEmpty then
-        HintLabel.Caption := _('The SQL statement will only run after centralized approval succeeds.')
+        HintMemo.Lines.Text := SqlMonitorTranslate('The SQL statement will only run after centralized approval succeeds.')
       else
-        HintLabel.Caption := _('Last polling error: ') + LastError;
+        HintMemo.Lines.Text := SqlMonitorTranslate('Last polling error: ') + LastError;
       Sleep(100);
     end;
 
@@ -937,14 +1061,14 @@ begin
       except
         on E:Exception do begin
           if Assigned(MainForm) then
-            MainForm.LogSQL(_('SQL monitor cancel warning: ') + E.Message, lcError);
+            MainForm.LogSQL(SqlMonitorTranslate('SQL monitor cancel warning: ') + E.Message, lcError);
         end;
       end;
       FreeAndNil(Response);
       Response := TSqlMonitorBatchResponse.Create;
       Response.RequestId := RequestId;
       Response.Status := smbsCancelled;
-      Response.ErrorMessage := _('Central SQL approval was cancelled by the user.');
+      Response.ErrorMessage := SqlMonitorTranslate('Central SQL approval was cancelled by the user.');
     end;
   finally
     if Assigned(MainForm) and OwnerWasEnabled then
@@ -973,3 +1097,4 @@ finalization
   SessionRegistrationsLock.Free;
 
 end.
+

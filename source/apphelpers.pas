@@ -3416,7 +3416,7 @@ begin
         FSqlMonitorContext.SendCompletion(FConnection, FQueryTime + FQueryNetTime);
       except
         on E:Exception do
-          LogFromThread(_('SQL monitor completion callback failed: ') + E.Message, lcError);
+          LogFromThread(SqlMonitorTranslate('SQL monitor completion callback failed: ') + E.Message, lcError);
       end;
     end;
     Synchronize(procedure begin MainForm.FinishedQueryExecution(Self); end);

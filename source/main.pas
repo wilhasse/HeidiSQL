@@ -3287,8 +3287,8 @@ begin
           if Response.Status = smbsPending then begin
             RequestId := Response.RequestId;
             if RequestId.IsEmpty then
-              raise ESqlMonitorError.Create(_('Central SQL approval request returned no request id.'));
-            ShowStatusMsg(_('Waiting for centralized SQL approval ...'));
+              raise ESqlMonitorError.Create(SqlMonitorTranslate('Central SQL approval request returned no request id.'));
+            ShowStatusMsg(SqlMonitorTranslate('Waiting for centralized SQL approval ...'));
             Response.Free;
             Response := nil;
             Client.WaitForDecision(RequestId, Response);
@@ -3299,8 +3299,8 @@ begin
             Context := TSqlMonitorExecutionContext.Create(Response.RequestId, StatementSql)
           else begin
             if DecisionMsg.IsEmpty then
-              DecisionMsg := _('Central SQL approval rejected this batch.');
-            LogSQL(_('SQL monitor blocked execution: ') + DecisionMsg, lcError, Connection);
+              DecisionMsg := SqlMonitorTranslate('Central SQL approval rejected this batch.');
+            LogSQL(SqlMonitorTranslate('SQL monitor blocked execution: ') + DecisionMsg, lcError, Connection);
             ErrorDialog(_('Central SQL approval blocked execution'), DecisionMsg);
             Result := False;
           end;
@@ -3310,9 +3310,9 @@ begin
           else if not (Response.Status in [smbsLogged, smbsApproved]) then begin
             DecisionMsg := SqlMonitorGetDecisionMessage(Response);
             if DecisionMsg.IsEmpty then
-              DecisionMsg := _('Central SQL logging is unavailable. Continuing without centralized logging.');
-            LogSQL(_('SQL monitor logging warning: ') + DecisionMsg, lcError);
-            ShowStatusMsg(_('Central SQL logging is unavailable. Continuing without centralized logging.'));
+              DecisionMsg := SqlMonitorTranslate('Central SQL logging is unavailable. Continuing without centralized logging.');
+            LogSQL(SqlMonitorTranslate('SQL monitor logging warning: ') + DecisionMsg, lcError);
+            ShowStatusMsg(SqlMonitorTranslate('Central SQL logging is unavailable. Continuing without centralized logging.'));
           end;
         end;
       finally
@@ -3324,11 +3324,11 @@ begin
   except
     on E:Exception do begin
       if HasGuardedWrites then begin
-        LogSQL(_('SQL monitor approval failed: ') + E.Message, lcError, Connection);
+        LogSQL(SqlMonitorTranslate('SQL monitor approval failed: ') + E.Message, lcError, Connection);
         ErrorDialog(_('Central SQL approval failed'), E.Message);
         Result := False;
       end else begin
-        LogSQL(_('SQL monitor logging warning: ') + E.Message, lcError);
+        LogSQL(SqlMonitorTranslate('SQL monitor logging warning: ') + E.Message, lcError);
         ShowStatusMsg(_('Central SQL logging is unavailable. Continuing without centralized logging.'));
       end;
     end;
