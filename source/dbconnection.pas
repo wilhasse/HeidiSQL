@@ -9418,21 +9418,52 @@ var
   IsVirtual: Boolean;
   TempRowsAffected, ExecutedRowsAffected, ExecutedRowsFound: Int64;
   ExecutedDurationMs: Cardinal;
+  MonitorContext: TSqlMonitorExecutionContext;
+  StatementRecorded: Boolean;
 begin
   // Delete current row from result
   PrepareEditing;
   IsVirtual := Assigned(FCurrentUpdateRow) and FCurrentUpdateRow.Inserted;
   if not IsVirtual then begin
     sql := GridQuery('DELETE', 'FROM ' + QuotedDbAndTableName + ' WHERE ' + GetWhereClause);
-    Connection.Query(sql);
-    ExecutedDurationMs := Connection.LastQueryDuration + Connection.LastQueryNetworkDuration;
-    ExecutedRowsAffected := Connection.RowsAffected;
-    ExecutedRowsFound := Connection.RowsFound;
-    TempRowsAffected := ExecutedRowsAffected;
-    Connection.ShowWarnings;
-    if TempRowsAffected = 0 then
-      raise EDbError.Create(FormatNumber(TempRowsAffected)+' rows deleted when that should have been 1.');
-    SqlMonitorLogExecutedStatement(Connection, sql, ExecutedDurationMs, ExecutedRowsAffected, ExecutedRowsFound);
+    MonitorContext := nil;
+    StatementRecorded := False;
+    ExecutedDurationMs := 0;
+    if not SqlMonitorPrepareSingleExecution(Connection, sql, MonitorContext) then
+      Exit;
+    try
+      try
+        Connection.Query(sql);
+        ExecutedDurationMs := Connection.LastQueryDuration + Connection.LastQueryNetworkDuration;
+        ExecutedRowsAffected := Connection.RowsAffected;
+        ExecutedRowsFound := Connection.RowsFound;
+        TempRowsAffected := ExecutedRowsAffected;
+        Connection.ShowWarnings;
+        if TempRowsAffected = 0 then
+          raise EDbError.Create(FormatNumber(TempRowsAffected)+' rows deleted when that should have been 1.');
+        if MonitorContext <> nil then begin
+          MonitorContext.MarkStatementResult(0, True, ExecutedDurationMs, ExecutedRowsAffected, ExecutedRowsFound, '');
+          StatementRecorded := True;
+        end;
+      except
+        on E:Exception do begin
+          ExecutedDurationMs := Connection.LastQueryDuration + Connection.LastQueryNetworkDuration;
+          if (MonitorContext <> nil) and (not StatementRecorded) then
+            MonitorContext.MarkStatementResult(0, False, ExecutedDurationMs, Connection.RowsAffected, Connection.RowsFound, E.Message);
+          raise;
+        end;
+      end;
+    finally
+      if MonitorContext <> nil then begin
+        try
+          MonitorContext.SendCompletion(Connection, ExecutedDurationMs);
+        except
+          on E:Exception do
+            Connection.Log(lcError, SqlMonitorTranslate('SQL monitor completion callback failed: ') + E.Message);
+        end;
+      end;
+      MonitorContext.Free;
+    end;
   end;
   if Assigned(FCurrentUpdateRow) then begin
     FUpdateData.Remove(FCurrentUpdateRow);
@@ -9627,110 +9658,155 @@ end;
 
 function TDBQuery.SaveModifications: Boolean;
 var
-  i: Integer;
+  i, StatementIndex: Integer;
   TempRowsAffected, ExecutedRowsAffected, ExecutedRowsFound: Int64;
-  ExecutedDurationMs: Cardinal;
+  ExecutedDurationMs, TotalDurationMs: Cardinal;
   Row: TGridRow;
   Cell: TGridValue;
   sqlUpdate, sqlInsertColumns, sqlInsertValues, Val, ExecutedSql: String;
-  RowModified: Boolean;
+  RowModified, StatementRecorded: Boolean;
   ColAttr: TTableColumn;
+  StatementSql: TStringList;
+  OperationRows: TList<TGridRow>;
+  OperationInserted: TList<Boolean>;
+  MonitorContext: TSqlMonitorExecutionContext;
 begin
   Result := True;
   if not FEditingPrepared then
     raise EDbError.Create(_('Internal error: Cannot post modifications before editing was prepared.'));
 
-  for Row in FUpdateData do begin
-    // Prepare update and insert queries
-    RecNo := Row.RecNo;
-    sqlUpdate := '';
-    sqlInsertColumns := '';
-    sqlInsertValues := '';
-    RowModified := False;
-    for i:=0 to ColumnCount-1 do begin
-      Cell := Row[i];
-      if not Cell.Modified then
-        continue;
-      RowModified := True;
-      if sqlUpdate <> '' then begin
-        sqlUpdate := sqlUpdate + ', ';
-        sqlInsertColumns := sqlInsertColumns + ', ';
-        sqlInsertValues := sqlInsertValues + ', ';
-      end;
-      if Cell.NewIsNull then
-        Val := 'NULL'
-      else if Cell.NewIsFunction then
-        Val := Cell.NewText
-      else case Datatype(i).Category of
-        dtcInteger, dtcReal:
-          Val := Connection.EscapeString(Cell.NewText, Datatype(i));
-        dtcBinary, dtcSpatial:
-          Val := FConnection.EscapeBin(Cell.NewText);
-        dtcTemporal:
-          Val := Connection.EscapeString(Connection.GetDateTimeValue(Cell.NewText, Datatype(i).Index))
-        else
-          Val := Connection.EscapeString(Cell.NewText, Datatype(i));
-      end;
-      sqlUpdate := sqlUpdate + Connection.QuoteIdent(FColumnOrgNames[i]) + '=' + Val;
-      sqlInsertColumns := sqlInsertColumns + Connection.QuoteIdent(FColumnOrgNames[i]);
-      sqlInsertValues := sqlInsertValues + Val;
-    end;
-
-    // Post query and fetch just inserted auto-increment id if applicable
-    if RowModified then try
-      if Row.Inserted then begin
-        ExecutedSql := 'INSERT INTO '+QuotedDbAndTableName+' ('+sqlInsertColumns+') VALUES ('+sqlInsertValues+')';
-        Connection.Query(ExecutedSql);
-        ExecutedDurationMs := Connection.LastQueryDuration + Connection.LastQueryNetworkDuration;
-        ExecutedRowsAffected := Connection.RowsAffected;
-        ExecutedRowsFound := Connection.RowsFound;
-        Connection.ShowWarnings;
-        SqlMonitorLogExecutedStatement(Connection, ExecutedSql, ExecutedDurationMs, ExecutedRowsAffected, ExecutedRowsFound);
-        for i:=0 to ColumnCount-1 do begin
-          ColAttr := ColAttributes(i);
-          if Assigned(ColAttr) and (ColAttr.DefaultType = cdtAutoInc) then begin
-            Row[i].NewText := UnformatNumber(Row[i].NewText);
-            if Row[i].NewText = '0' then
-              Row[i].NewText := Connection.GetVar('SELECT ' + Connection.SqlProvider.GetSql(qFuncLastAutoIncNumber));
-            Row[i].NewIsNull := False;
-            break;
-          end;
-        end;
-      end else begin
-        sqlUpdate := QuotedDbAndTableName+' SET '+sqlUpdate+' WHERE '+GetWhereClause;
-        sqlUpdate := GridQuery('UPDATE', sqlUpdate);
-        Connection.Query(sqlUpdate);
-        ExecutedSql := sqlUpdate;
-        ExecutedDurationMs := Connection.LastQueryDuration + Connection.LastQueryNetworkDuration;
-        ExecutedRowsAffected := Connection.RowsAffected;
-        ExecutedRowsFound := Connection.RowsFound;
-        TempRowsAffected := ExecutedRowsAffected;
-        Connection.ShowWarnings;
-        if TempRowsAffected = 0 then begin
-          raise EDbError.Create(FormatNumber(TempRowsAffected)+' rows updated when that should have been 1.');
-          Result := False;
-        end;
-        SqlMonitorLogExecutedStatement(Connection, ExecutedSql, ExecutedDurationMs, ExecutedRowsAffected, ExecutedRowsFound);
-      end;
-      // Reset modification flags
+  StatementSql := TStringList.Create;
+  OperationRows := TList<TGridRow>.Create;
+  OperationInserted := TList<Boolean>.Create;
+  MonitorContext := nil;
+  TotalDurationMs := 0;
+  try
+    for Row in FUpdateData do begin
+      // Prepare update and insert queries
+      RecNo := Row.RecNo;
+      sqlUpdate := '';
+      sqlInsertColumns := '';
+      sqlInsertValues := '';
+      RowModified := False;
       for i:=0 to ColumnCount-1 do begin
         Cell := Row[i];
-        Cell.OldText := Cell.NewText;
-        Cell.OldIsNull := Cell.NewIsNull;
-        Cell.OldIsFunction := False;
-        Cell.NewIsFunction := False;
-        Cell.Modified := False;
+        if not Cell.Modified then
+          continue;
+        RowModified := True;
+        if sqlUpdate <> '' then begin
+          sqlUpdate := sqlUpdate + ', ';
+          sqlInsertColumns := sqlInsertColumns + ', ';
+          sqlInsertValues := sqlInsertValues + ', ';
+        end;
+        if Cell.NewIsNull then
+          Val := 'NULL'
+        else if Cell.NewIsFunction then
+          Val := Cell.NewText
+        else case Datatype(i).Category of
+          dtcInteger, dtcReal:
+            Val := Connection.EscapeString(Cell.NewText, Datatype(i));
+          dtcBinary, dtcSpatial:
+            Val := FConnection.EscapeBin(Cell.NewText);
+          dtcTemporal:
+            Val := Connection.EscapeString(Connection.GetDateTimeValue(Cell.NewText, Datatype(i).Index))
+          else
+            Val := Connection.EscapeString(Cell.NewText, Datatype(i));
+        end;
+        sqlUpdate := sqlUpdate + Connection.QuoteIdent(FColumnOrgNames[i]) + '=' + Val;
+        sqlInsertColumns := sqlInsertColumns + Connection.QuoteIdent(FColumnOrgNames[i]);
+        sqlInsertValues := sqlInsertValues + Val;
       end;
-      Row.Inserted := False;
-      // Reload real row data from server if keys allow that
-      EnsureFullRow(True);
-    except
-      on E:EDbError do begin
-        Result := False;
-        ErrorDialog(E.Message);
+
+      if RowModified then begin
+        if Row.Inserted then
+          ExecutedSql := 'INSERT INTO '+QuotedDbAndTableName+' ('+sqlInsertColumns+') VALUES ('+sqlInsertValues+')'
+        else begin
+          sqlUpdate := QuotedDbAndTableName+' SET '+sqlUpdate+' WHERE '+GetWhereClause;
+          ExecutedSql := GridQuery('UPDATE', sqlUpdate);
+        end;
+        StatementSql.Add(ExecutedSql);
+        OperationRows.Add(Row);
+        OperationInserted.Add(Row.Inserted);
       end;
     end;
 
+    if StatementSql.Count = 0 then
+      Exit(True);
+
+    if not SqlMonitorPrepareExecution(Connection, StatementSql, MonitorContext) then begin
+      Result := False;
+      Exit;
+    end;
+
+    for StatementIndex:=0 to StatementSql.Count-1 do begin
+      Row := OperationRows[StatementIndex];
+      RecNo := Row.RecNo;
+      ExecutedSql := StatementSql[StatementIndex];
+      StatementRecorded := False;
+      try
+        Connection.Query(ExecutedSql);
+        ExecutedDurationMs := Connection.LastQueryDuration + Connection.LastQueryNetworkDuration;
+        Inc(TotalDurationMs, ExecutedDurationMs);
+        ExecutedRowsAffected := Connection.RowsAffected;
+        ExecutedRowsFound := Connection.RowsFound;
+        Connection.ShowWarnings;
+        if not OperationInserted[StatementIndex] then begin
+          TempRowsAffected := ExecutedRowsAffected;
+          if TempRowsAffected = 0 then
+            raise EDbError.Create(FormatNumber(TempRowsAffected)+' rows updated when that should have been 1.');
+        end;
+        if MonitorContext <> nil then begin
+          MonitorContext.MarkStatementResult(StatementIndex, True, ExecutedDurationMs, ExecutedRowsAffected, ExecutedRowsFound, '');
+          StatementRecorded := True;
+        end;
+        if OperationInserted[StatementIndex] then begin
+          for i:=0 to ColumnCount-1 do begin
+            ColAttr := ColAttributes(i);
+            if Assigned(ColAttr) and (ColAttr.DefaultType = cdtAutoInc) then begin
+              Row[i].NewText := UnformatNumber(Row[i].NewText);
+              if Row[i].NewText = '0' then
+                Row[i].NewText := Connection.GetVar('SELECT ' + Connection.SqlProvider.GetSql(qFuncLastAutoIncNumber));
+              Row[i].NewIsNull := False;
+              break;
+            end;
+          end;
+        end;
+        for i:=0 to ColumnCount-1 do begin
+          Cell := Row[i];
+          Cell.OldText := Cell.NewText;
+          Cell.OldIsNull := Cell.NewIsNull;
+          Cell.OldIsFunction := False;
+          Cell.NewIsFunction := False;
+          Cell.Modified := False;
+        end;
+        Row.Inserted := False;
+        EnsureFullRow(True);
+      except
+        on E:Exception do begin
+          Result := False;
+          ExecutedDurationMs := Connection.LastQueryDuration + Connection.LastQueryNetworkDuration;
+          if not StatementRecorded then begin
+            Inc(TotalDurationMs, ExecutedDurationMs);
+            if MonitorContext <> nil then
+              MonitorContext.MarkStatementResult(StatementIndex, False, ExecutedDurationMs, Connection.RowsAffected, Connection.RowsFound, E.Message);
+          end;
+          ErrorDialog(E.Message);
+        end;
+      end;
+    end;
+  finally
+    if MonitorContext <> nil then begin
+      try
+        MonitorContext.SendCompletion(Connection, TotalDurationMs);
+      except
+        on E:Exception do
+          Connection.Log(lcError, SqlMonitorTranslate('SQL monitor completion callback failed: ') + E.Message);
+      end;
+    end;
+    MonitorContext.Free;
+    OperationInserted.Free;
+    OperationRows.Free;
+    StatementSql.Free;
   end;
 end;
 

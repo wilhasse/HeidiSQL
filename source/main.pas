@@ -3261,82 +3261,17 @@ end;
 function TMainForm.PrepareSqlMonitorExecution(Connection: TDBConnection; Batch: TSQLBatch;
   out Context: TSqlMonitorExecutionContext): Boolean;
 var
-  Client: TSqlMonitorClient;
-  Response: TSqlMonitorBatchResponse;
   StatementSql: TStringList;
   Query: TSQLSentence;
-  HasGuardedWrites: Boolean;
-  DecisionMsg, RequestId: String;
 begin
-  Result := True;
-  Context := nil;
-  if not SqlMonitorShouldHandle(Connection) then
-    Exit;
-
   StatementSql := TStringList.Create;
-  HasGuardedWrites := BatchHasGuardedWrites(Batch);
   try
     for Query in Batch do
       StatementSql.Add(Query.SQL);
-
-    Client := TSqlMonitorClient.Create(Self);
-    try
-      Response := Client.CreateRequest(Connection, StatementSql);
-      try
-        if HasGuardedWrites then begin
-          if Response.Status = smbsPending then begin
-            RequestId := Response.RequestId;
-            if RequestId.IsEmpty then
-              raise ESqlMonitorError.Create(SqlMonitorTranslate('Central SQL approval request returned no request id.'));
-            ShowStatusMsg(SqlMonitorTranslate('Waiting for centralized SQL approval ...'));
-            Response.Free;
-            Response := nil;
-            Client.WaitForDecision(RequestId, Response);
-          end;
-
-          DecisionMsg := SqlMonitorGetDecisionMessage(Response);
-          if (Response.Status = smbsApproved) and (not Response.RequestId.IsEmpty) then
-            Context := TSqlMonitorExecutionContext.Create(Response.RequestId, StatementSql)
-          else begin
-            if DecisionMsg.IsEmpty then
-              DecisionMsg := SqlMonitorTranslate('Central SQL approval rejected this batch.');
-            LogSQL(SqlMonitorTranslate('SQL monitor blocked execution: ') + DecisionMsg, lcError, Connection);
-            ErrorDialog(_('Central SQL approval blocked execution'), DecisionMsg);
-            Result := False;
-          end;
-        end else begin
-          if (Response.Status in [smbsLogged, smbsApproved]) and (not Response.RequestId.IsEmpty) then
-            Context := TSqlMonitorExecutionContext.Create(Response.RequestId, StatementSql)
-          else if not (Response.Status in [smbsLogged, smbsApproved]) then begin
-            DecisionMsg := SqlMonitorGetDecisionMessage(Response);
-            if DecisionMsg.IsEmpty then
-              DecisionMsg := SqlMonitorTranslate('Central SQL logging is unavailable. Continuing without centralized logging.');
-            LogSQL(SqlMonitorTranslate('SQL monitor logging warning: ') + DecisionMsg, lcError);
-            ShowStatusMsg(SqlMonitorTranslate('Central SQL logging is unavailable. Continuing without centralized logging.'));
-          end;
-        end;
-      finally
-        Response.Free;
-      end;
-    finally
-      Client.Free;
-    end;
-  except
-    on E:Exception do begin
-      if HasGuardedWrites then begin
-        LogSQL(SqlMonitorTranslate('SQL monitor approval failed: ') + E.Message, lcError, Connection);
-        ErrorDialog(_('Central SQL approval failed'), E.Message);
-        Result := False;
-      end else begin
-        LogSQL(SqlMonitorTranslate('SQL monitor logging warning: ') + E.Message, lcError);
-        ShowStatusMsg(_('Central SQL logging is unavailable. Continuing without centralized logging.'));
-      end;
-    end;
+    Result := SqlMonitorPrepareExecution(Connection, StatementSql, Context);
+  finally
+    StatementSql.Free;
   end;
-
-  if not Result then
-    FreeAndNil(Context);
-  StatementSql.Free;
 end;
 
 

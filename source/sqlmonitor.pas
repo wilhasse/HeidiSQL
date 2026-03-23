@@ -74,8 +74,8 @@ type
     FOwner: TComponent;
     function BuildSessionPayload(Connection: TDBConnection; const DatabaseName: String): String;
     function BuildTargetJson(Connection: TDBConnection; const DatabaseName: String): TJSONObject;
-    function BuildExecutionPayload(Connection: TDBConnection; const SQL: String; DurationMs: Cardinal; RowsAffected, RowsFound: Int64; Success: Boolean; const ErrorMessage: String): String;
-    function BuildRequestPayload(Connection: TDBConnection; StatementSql: TStrings): String;
+    function BuildExecutionPayload(Connection: TDBConnection; const SQL, TicketNumber: String; DurationMs: Cardinal; RowsAffected, RowsFound: Int64; Success: Boolean; const ErrorMessage: String): String;
+    function BuildRequestPayload(Connection: TDBConnection; StatementSql: TStrings; const TicketNumber: String): String;
     function ParseBatchResponse(const JsonText: String): TSqlMonitorBatchResponse;
     function SendJsonRequest(const URL, Method, Payload: String; out ResponseText: String;
       TimeOutSeconds: Cardinal=0): Integer;
@@ -90,7 +90,7 @@ type
     class function TryGetSettingInt(const Name: String; DefaultValue: Integer): Integer; static;
     function CancelRequest(const RequestId: String): Boolean;
     function CompleteRequest(Connection: TDBConnection; Context: TSqlMonitorExecutionContext; TotalDurationMs: Cardinal): Boolean;
-    function CreateRequest(Connection: TDBConnection; StatementSql: TStrings): TSqlMonitorBatchResponse;
+    function CreateRequest(Connection: TDBConnection; StatementSql: TStrings; const TicketNumber: String=''): TSqlMonitorBatchResponse;
     function GetRequestStatus(const RequestId: String): TSqlMonitorBatchResponse;
     function RegisterSession(Connection: TDBConnection; const DatabaseName: String): Boolean;
     function WaitForDecision(const RequestId: String; out Response: TSqlMonitorBatchResponse): Boolean;
@@ -99,7 +99,9 @@ type
 function SqlMonitorShouldHandle(Connection: TDBConnection): Boolean;
 function SqlMonitorGetDecisionMessage(Response: TSqlMonitorBatchResponse): String;
 function SqlMonitorTranslate(const MsgId: String): String;
-procedure SqlMonitorLogExecutedStatement(Connection: TDBConnection; const SQL: String; DurationMs: Cardinal; RowsAffected, RowsFound: Int64);
+function SqlMonitorPrepareExecution(Connection: TDBConnection; StatementSql: TStrings; out Context: TSqlMonitorExecutionContext): Boolean;
+function SqlMonitorPrepareSingleExecution(Connection: TDBConnection; const SQL: String; out Context: TSqlMonitorExecutionContext): Boolean;
+procedure SqlMonitorLogExecutedStatement(Connection: TDBConnection; const SQL: String; DurationMs: Cardinal; RowsAffected, RowsFound: Int64; const TicketNumber: String='');
 procedure SqlMonitorRegisterSession(Connection: TDBConnection; const DatabaseName: String='');
 procedure SqlMonitorForgetConnection(Connection: TDBConnection);
 procedure SqlMonitorShowError(const Title, Msg: String);
@@ -122,6 +124,7 @@ type
 var
   SessionRegistrations: TDictionary<NativeUInt, String>;
   SessionRegistrationsLock: TObject;
+  LastTicketNumber: String;
 
 function SqlMonitorTranslate(const MsgId: String): String;
 var
@@ -174,7 +177,29 @@ begin
   else if SameText(MsgId, 'SQL monitor approval failed: ') then
     Result := 'Falha na aprovacao do monitor SQL: '
   else if SameText(MsgId, 'Central SQL approval failed') then
-    Result := 'Falha na aprovacao SQL centralizada';
+    Result := 'Falha na aprovacao SQL centralizada'
+  else if SameText(MsgId, 'Confirm SQL write') then
+    Result := 'Confirmar escrita SQL'
+  else if SameText(MsgId, 'Ticket number') then
+    Result := 'Numero do chamado'
+  else if SameText(MsgId, 'Please enter the ticket number and confirm this SQL write before it is executed.') then
+    Result := 'Informe o numero do chamado e confirme esta escrita SQL antes da execucao.'
+  else if SameText(MsgId, 'This write will wait for centralized approval after you confirm the ticket number.') then
+    Result := 'Esta escrita aguardara aprovacao centralizada apos a confirmacao do numero do chamado.'
+  else if SameText(MsgId, 'This write will be logged centrally after you confirm the ticket number.') then
+    Result := 'Esta escrita sera registrada no monitor centralizado apos a confirmacao do numero do chamado.'
+  else if SameText(MsgId, 'Ticket number is required before continuing.') then
+    Result := 'O numero do chamado e obrigatorio antes de continuar.'
+  else if SameText(MsgId, 'Confirm') then
+    Result := 'Confirmar'
+  else if SameText(MsgId, 'Central SQL monitor blocked execution') then
+    Result := 'Monitor SQL centralizado bloqueou a execucao'
+  else if SameText(MsgId, 'SQL monitor write registration failed: ') then
+    Result := 'Falha no registro da escrita no monitor SQL: '
+  else if SameText(MsgId, 'Central SQL write registration failed') then
+    Result := 'Falha no registro centralizado da escrita SQL'
+  else if SameText(MsgId, 'Central SQL write registration failed.') then
+    Result := 'Falha no registro centralizado da escrita SQL.';
 end;
 
 function BatchStatusFromString(const Value: String): TSqlMonitorBatchStatus;
@@ -498,7 +523,315 @@ begin
 end;
 
 
-procedure SqlMonitorLogExecutedStatement(Connection: TDBConnection; const SQL: String; DurationMs: Cardinal; RowsAffected, RowsFound: Int64);
+function StatementIsGuardedWrite(const SQL: String): Boolean;
+var
+  Command: String;
+begin
+  Command := UpperCase(getFirstWord(SQL));
+  Result := (Command = 'UPDATE') or (Command = 'DELETE');
+end;
+
+
+function StatementIsWrite(const SQL: String): Boolean;
+var
+  Command: String;
+begin
+  Command := UpperCase(getFirstWord(SQL));
+  Result := (Command = 'INSERT') or (Command = 'UPDATE') or (Command = 'DELETE');
+end;
+
+
+function StatementListHasGuardedWrites(StatementSql: TStrings): Boolean;
+var
+  i: Integer;
+begin
+  Result := False;
+  if StatementSql = nil then
+    Exit;
+  for i:=0 to StatementSql.Count-1 do begin
+    if StatementIsGuardedWrite(StatementSql[i]) then begin
+      Result := True;
+      Break;
+    end;
+  end;
+end;
+
+
+function StatementListHasWrites(StatementSql: TStrings): Boolean;
+var
+  i: Integer;
+begin
+  Result := False;
+  if StatementSql = nil then
+    Exit;
+  for i:=0 to StatementSql.Count-1 do begin
+    if StatementIsWrite(StatementSql[i]) then begin
+      Result := True;
+      Break;
+    end;
+  end;
+end;
+
+
+function BuildStatementPreview(StatementSql: TStrings): String;
+var
+  i, PreviewCount: Integer;
+  Line: String;
+begin
+  Result := '';
+  if (StatementSql = nil) or (StatementSql.Count = 0) then
+    Exit;
+
+  PreviewCount := Min(StatementSql.Count, 4);
+  for i:=0 to PreviewCount-1 do begin
+    Line := Trim(StringReplace(StringReplace(StatementSql[i], #13, ' ', [rfReplaceAll]), #10, ' ', [rfReplaceAll]));
+    if Length(Line) > 180 then
+      Line := Copy(Line, 1, 177) + '...';
+    if Result <> '' then
+      Result := Result + sLineBreak + sLineBreak;
+    Result := Result + IntToStr(i+1) + '. ' + Line;
+  end;
+  if StatementSql.Count > PreviewCount then
+    Result := Result + sLineBreak + sLineBreak + '...';
+end;
+
+
+function PromptForTicketNumber(StatementSql: TStrings; HasGuardedWrites: Boolean; out TicketNumber: String): Boolean;
+var
+  Dialog: TForm;
+  IntroLabel, TicketLabel: TLabel;
+  TicketEdit: TEdit;
+  SummaryMemo: TMemo;
+  ConfirmButton, CancelButton: TButton;
+  SummaryText, PreviewText: String;
+begin
+  Result := False;
+  TicketNumber := '';
+  Dialog := TForm.CreateNew(MainForm);
+  try
+    Dialog.Caption := SqlMonitorTranslate('Confirm SQL write');
+    Dialog.BorderStyle := bsSizeable;
+    Dialog.Position := poMainFormCenter;
+    Dialog.Width := 720;
+    Dialog.Height := 360;
+    Dialog.Constraints.MinWidth := 560;
+    Dialog.Constraints.MinHeight := 300;
+    Dialog.BorderIcons := [biSystemMenu, biMaximize];
+
+    IntroLabel := TLabel.Create(Dialog);
+    IntroLabel.Parent := Dialog;
+    IntroLabel.Left := 16;
+    IntroLabel.Top := 16;
+    IntroLabel.Width := Dialog.ClientWidth - 32;
+    IntroLabel.Anchors := [akLeft, akTop, akRight];
+    IntroLabel.WordWrap := True;
+    IntroLabel.Caption := SqlMonitorTranslate('Please enter the ticket number and confirm this SQL write before it is executed.');
+
+    TicketLabel := TLabel.Create(Dialog);
+    TicketLabel.Parent := Dialog;
+    TicketLabel.Left := 16;
+    TicketLabel.Top := 64;
+    TicketLabel.Caption := SqlMonitorTranslate('Ticket number');
+
+    TicketEdit := TEdit.Create(Dialog);
+    TicketEdit.Parent := Dialog;
+    TicketEdit.Left := 16;
+    TicketEdit.Top := 84;
+    TicketEdit.Width := Dialog.ClientWidth - 32;
+    TicketEdit.Anchors := [akLeft, akTop, akRight];
+    TicketEdit.Text := LastTicketNumber;
+
+    SummaryMemo := TMemo.Create(Dialog);
+    SummaryMemo.Parent := Dialog;
+    SummaryMemo.Left := 16;
+    SummaryMemo.Top := 120;
+    SummaryMemo.Width := Dialog.ClientWidth - 32;
+    SummaryMemo.Height := Dialog.ClientHeight - 176;
+    SummaryMemo.Anchors := [akLeft, akTop, akRight, akBottom];
+    SummaryMemo.ReadOnly := True;
+    SummaryMemo.ScrollBars := ssVertical;
+    SummaryMemo.WordWrap := True;
+    SummaryMemo.TabStop := False;
+    if HasGuardedWrites then
+      SummaryText := SqlMonitorTranslate('This write will wait for centralized approval after you confirm the ticket number.')
+    else
+      SummaryText := SqlMonitorTranslate('This write will be logged centrally after you confirm the ticket number.');
+    PreviewText := BuildStatementPreview(StatementSql);
+    if not PreviewText.IsEmpty then
+      SummaryText := SummaryText + sLineBreak + sLineBreak + PreviewText;
+    SummaryMemo.Lines.Text := SummaryText;
+
+    ConfirmButton := TButton.Create(Dialog);
+    ConfirmButton.Parent := Dialog;
+    ConfirmButton.Width := 100;
+    ConfirmButton.Height := 30;
+    ConfirmButton.Left := Dialog.ClientWidth - 216;
+    ConfirmButton.Top := Dialog.ClientHeight - 44;
+    ConfirmButton.Anchors := [akRight, akBottom];
+    ConfirmButton.Caption := SqlMonitorTranslate('Confirm');
+    ConfirmButton.Default := True;
+    ConfirmButton.ModalResult := mrOk;
+
+    CancelButton := TButton.Create(Dialog);
+    CancelButton.Parent := Dialog;
+    CancelButton.Width := 90;
+    CancelButton.Height := 30;
+    CancelButton.Left := Dialog.ClientWidth - 104;
+    CancelButton.Top := Dialog.ClientHeight - 44;
+    CancelButton.Anchors := [akRight, akBottom];
+    CancelButton.Caption := _('Cancel');
+    CancelButton.Cancel := True;
+    CancelButton.ModalResult := mrCancel;
+
+    Dialog.ActiveControl := TicketEdit;
+    repeat
+      if Dialog.ShowModal <> mrOk then
+        Exit(False);
+      TicketNumber := Trim(TicketEdit.Text);
+      if not TicketNumber.IsEmpty then begin
+        LastTicketNumber := TicketNumber;
+        Result := True;
+        Break;
+      end;
+      SqlMonitorShowError(SqlMonitorTranslate('Confirm SQL write'), SqlMonitorTranslate('Ticket number is required before continuing.'));
+      Dialog.ActiveControl := TicketEdit;
+    until False;
+  finally
+    Dialog.Free;
+  end;
+end;
+
+
+function SqlMonitorPrepareExecution(Connection: TDBConnection; StatementSql: TStrings; out Context: TSqlMonitorExecutionContext): Boolean;
+var
+  Client: TSqlMonitorClient;
+  Response: TSqlMonitorBatchResponse;
+  HasGuardedWrites, HasWrites: Boolean;
+  DecisionMsg, RequestId, TicketNumber, ErrorTitle: String;
+begin
+  Result := True;
+  Context := nil;
+  if not SqlMonitorShouldHandle(Connection) then
+    Exit;
+  if (StatementSql = nil) or (StatementSql.Count = 0) then
+    Exit;
+
+  HasGuardedWrites := StatementListHasGuardedWrites(StatementSql);
+  HasWrites := StatementListHasWrites(StatementSql);
+  TicketNumber := '';
+
+  if HasWrites then begin
+    if not PromptForTicketNumber(StatementSql, HasGuardedWrites, TicketNumber) then begin
+      Result := False;
+      Exit;
+    end;
+  end;
+
+  try
+    Client := TSqlMonitorClient.Create(MainForm);
+    try
+      Response := Client.CreateRequest(Connection, StatementSql, TicketNumber);
+      try
+        if HasGuardedWrites and (Response.Status = smbsPending) then begin
+          RequestId := Response.RequestId;
+          if RequestId.IsEmpty then
+            raise ESqlMonitorError.Create(SqlMonitorTranslate('Central SQL approval request returned no request id.'));
+          if Assigned(MainForm) then
+            MainForm.ShowStatusMsg(SqlMonitorTranslate('Waiting for centralized SQL approval ...'));
+          Response.Free;
+          Response := nil;
+          Client.WaitForDecision(RequestId, Response);
+        end;
+
+        if HasWrites then begin
+          if (Response.Status in [smbsLogged, smbsApproved]) and (not Response.RequestId.IsEmpty) then
+            Context := TSqlMonitorExecutionContext.Create(Response.RequestId, StatementSql)
+          else begin
+            DecisionMsg := SqlMonitorGetDecisionMessage(Response);
+            if DecisionMsg.IsEmpty then begin
+              if HasGuardedWrites then
+                DecisionMsg := SqlMonitorTranslate('Central SQL approval rejected this batch.')
+              else
+                DecisionMsg := SqlMonitorTranslate('Central SQL write registration failed.');
+            end;
+            if Assigned(MainForm) then begin
+              if HasGuardedWrites then begin
+                MainForm.LogSQL(SqlMonitorTranslate('SQL monitor blocked execution: ') + DecisionMsg, lcError, Connection);
+                ErrorTitle := _('Central SQL approval blocked execution');
+              end else begin
+                MainForm.LogSQL(SqlMonitorTranslate('SQL monitor write registration failed: ') + DecisionMsg, lcError, Connection);
+                ErrorTitle := SqlMonitorTranslate('Central SQL write registration failed');
+              end;
+              SqlMonitorShowError(ErrorTitle, DecisionMsg);
+            end;
+            Result := False;
+          end;
+        end else begin
+          if (Response.Status in [smbsLogged, smbsApproved]) and (not Response.RequestId.IsEmpty) then
+            Context := TSqlMonitorExecutionContext.Create(Response.RequestId, StatementSql)
+          else if not (Response.Status in [smbsLogged, smbsApproved]) then begin
+            DecisionMsg := SqlMonitorGetDecisionMessage(Response);
+            if DecisionMsg.IsEmpty then
+              DecisionMsg := SqlMonitorTranslate('Central SQL logging is unavailable. Continuing without centralized logging.');
+            if Assigned(MainForm) then begin
+              MainForm.LogSQL(SqlMonitorTranslate('SQL monitor logging warning: ') + DecisionMsg, lcError);
+              MainForm.ShowStatusMsg(SqlMonitorTranslate('Central SQL logging is unavailable. Continuing without centralized logging.'));
+            end;
+          end;
+        end;
+      finally
+        Response.Free;
+      end;
+    finally
+      Client.Free;
+    end;
+  except
+    on E:Exception do begin
+      if HasWrites then begin
+        if Assigned(MainForm) then begin
+          if HasGuardedWrites then begin
+            MainForm.LogSQL(SqlMonitorTranslate('SQL monitor approval failed: ') + E.Message, lcError, Connection);
+            SqlMonitorShowError(_('Central SQL approval failed'), E.Message);
+          end else begin
+            MainForm.LogSQL(SqlMonitorTranslate('SQL monitor write registration failed: ') + E.Message, lcError, Connection);
+            SqlMonitorShowError(SqlMonitorTranslate('Central SQL write registration failed'), E.Message);
+          end;
+        end;
+        Result := False;
+      end else begin
+        if Assigned(MainForm) then begin
+          MainForm.LogSQL(SqlMonitorTranslate('SQL monitor logging warning: ') + E.Message, lcError);
+          MainForm.ShowStatusMsg(_('Central SQL logging is unavailable. Continuing without centralized logging.'));
+        end;
+      end;
+    end;
+  end;
+
+  if not Result then
+    FreeAndNil(Context);
+end;
+
+
+function SqlMonitorPrepareSingleExecution(Connection: TDBConnection; const SQL: String; out Context: TSqlMonitorExecutionContext): Boolean;
+var
+  StatementSql: TStringList;
+begin
+  if SQL.Trim.IsEmpty then begin
+    Context := nil;
+    Result := True;
+    Exit;
+  end;
+  StatementSql := TStringList.Create;
+  try
+    StatementSql.Add(SQL);
+    Result := SqlMonitorPrepareExecution(Connection, StatementSql, Context);
+  finally
+    StatementSql.Free;
+  end;
+end;
+
+
+procedure SqlMonitorLogExecutedStatement(Connection: TDBConnection; const SQL: String; DurationMs: Cardinal; RowsAffected, RowsFound: Int64; const TicketNumber: String='');
 var
   Client: TSqlMonitorClient;
   Payload, Url: String;
@@ -513,7 +846,7 @@ begin
   try
     Url := TSqlMonitorClient.BaseUrl + '/v1/sql-executions';
     TimeoutSeconds := TSqlMonitorClient.SessionTimeoutSeconds;
-    Payload := Client.BuildExecutionPayload(Connection, SQL, DurationMs, RowsAffected, RowsFound, True, '');
+    Payload := Client.BuildExecutionPayload(Connection, SQL, TicketNumber, DurationMs, RowsAffected, RowsFound, True, '');
   finally
     Client.Free;
   end;
@@ -790,7 +1123,7 @@ begin
 end;
 
 
-function TSqlMonitorClient.BuildExecutionPayload(Connection: TDBConnection; const SQL: String; DurationMs: Cardinal; RowsAffected, RowsFound: Int64; Success: Boolean; const ErrorMessage: String): String;
+function TSqlMonitorClient.BuildExecutionPayload(Connection: TDBConnection; const SQL, TicketNumber: String; DurationMs: Cardinal; RowsAffected, RowsFound: Int64; Success: Boolean; const ErrorMessage: String): String;
 var
   RootJson, StatementJson: TJSONObject;
   StatementsJson: TJSONArray;
@@ -803,6 +1136,8 @@ begin
     RootJson.AddPair('client_host', GetClientHostName);
     RootJson.AddPair('target', BuildTargetJson(Connection, ''));
     RootJson.AddPair('total_duration_ms', TJSONNumber.Create(DurationMs));
+    if not TicketNumber.IsEmpty then
+      RootJson.AddPair('ticket_number', TicketNumber);
 
     StatementsJson := TJSONArray.Create;
     StatementJson := TJSONObject.Create;
@@ -823,7 +1158,7 @@ begin
 end;
 
 
-function TSqlMonitorClient.BuildRequestPayload(Connection: TDBConnection; StatementSql: TStrings): String;
+function TSqlMonitorClient.BuildRequestPayload(Connection: TDBConnection; StatementSql: TStrings; const TicketNumber: String): String;
 var
   RootJson, StatementJson: TJSONObject;
   StatementsJson: TJSONArray;
@@ -836,6 +1171,8 @@ begin
     RootJson.AddPair('actor_id', GetClientActorId);
     RootJson.AddPair('client_host', GetClientHostName);
     RootJson.AddPair('target', BuildTargetJson(Connection, ''));
+    if not TicketNumber.IsEmpty then
+      RootJson.AddPair('ticket_number', TicketNumber);
 
     StatementsJson := TJSONArray.Create;
     if StatementSql <> nil then begin
@@ -919,11 +1256,11 @@ begin
 end;
 
 
-function TSqlMonitorClient.CreateRequest(Connection: TDBConnection; StatementSql: TStrings): TSqlMonitorBatchResponse;
+function TSqlMonitorClient.CreateRequest(Connection: TDBConnection; StatementSql: TStrings; const TicketNumber: String=''): TSqlMonitorBatchResponse;
 var
   ResponseText: String;
 begin
-  SendJsonRequest(BaseUrl + '/v1/sql-requests', 'POST', BuildRequestPayload(Connection, StatementSql), ResponseText);
+  SendJsonRequest(BaseUrl + '/v1/sql-requests', 'POST', BuildRequestPayload(Connection, StatementSql, TicketNumber), ResponseText);
   Result := ParseBatchResponse(ResponseText);
 end;
 
