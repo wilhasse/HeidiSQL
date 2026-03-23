@@ -24,6 +24,9 @@ uses
   SynEditCodeFolding, SynEditStrConst, texteditor, System.Character, generic_types, Sequal.Suggest,
   VirtualTrees.BaseAncestorVCL, VirtualTrees.BaseTree, VirtualTrees.AncestorVCL;
 
+const
+  CUSTOM_BUILD_LABEL = 'cslog de66f37c';
+
 
 type
 
@@ -4517,6 +4520,10 @@ var
   RowNum: PInt64;
   Results: TDBQuery;
   Nodes: TNodeArray;
+  StatementSql: TStringList;
+  MonitorContext: TSqlMonitorExecutionContext;
+  TotalDurationMs: Cardinal;
+  UseBatchDelete: Boolean;
   i: Integer;
 begin
   // Delete row(s)
@@ -4529,33 +4536,75 @@ begin
     if MessageDialog(f_('Delete %s row(s)?', [FormatNumber(Grid.SelectedCount)]),
       mtConfirmation, [mbOK, mbCancel]) = mrOK then begin
       FocusAfterDelete := nil;
-      EnableProgress(Grid.SelectedCount);
-      Node := GetNextNode(Grid, nil, True);
-      while Assigned(Node) do begin
-        RowNum := Grid.GetNodeData(Node);
-        ShowStatusMsg(f_('Deleting row #%s of %s ...', [FormatNumber(ProgressBarStatus.Position+1), FormatNumber(ProgressBarStatus.Max)]));
-        Results.RecNo := RowNum^;
-        Results.DeleteRow;
-        ProgressStep;
-        SetLength(Nodes, Length(Nodes)+1);
-        Nodes[Length(Nodes)-1] := Node;
-        FocusAfterDelete := Node;
-        Node := GetNextNode(Grid, Node, True);
+      StatementSql := TStringList.Create;
+      MonitorContext := nil;
+      TotalDurationMs := 0;
+      try
+        Node := GetNextNode(Grid, nil, True);
+        while Assigned(Node) do begin
+          RowNum := Grid.GetNodeData(Node);
+          Results.RecNo := RowNum^;
+          StatementSql.Add(Results.BuildDeleteStatement);
+          SetLength(Nodes, Length(Nodes)+1);
+          Nodes[Length(Nodes)-1] := Node;
+          FocusAfterDelete := Node;
+          Node := GetNextNode(Grid, Node, True);
+        end;
+
+        UseBatchDelete := (StatementSql.Count > 1);
+        if UseBatchDelete then begin
+          for i:=0 to StatementSql.Count-1 do begin
+            if StatementSql[i].IsEmpty then begin
+              UseBatchDelete := False;
+              Break;
+            end;
+          end;
+        end;
+
+        EnableProgress(Grid.SelectedCount);
+        if UseBatchDelete then begin
+          if not SqlMonitorPrepareExecution(Results.Connection, StatementSql, MonitorContext) then
+            Exit;
+        end;
+
+        for i:=Low(Nodes) to High(Nodes) do begin
+          RowNum := Grid.GetNodeData(Nodes[i]);
+          ShowStatusMsg(f_('Deleting row #%s of %s ...', [FormatNumber(ProgressBarStatus.Position+1), FormatNumber(ProgressBarStatus.Max)]));
+          Results.RecNo := RowNum^;
+          if UseBatchDelete then
+            Results.DeleteRow(StatementSql[i], MonitorContext, i)
+          else
+            Results.DeleteRow;
+          Inc(TotalDurationMs, Results.Connection.LastQueryDuration + Results.Connection.LastQueryNetworkDuration);
+          ProgressStep;
+        end;
+
+        ShowStatusMsg(_('Clean up ...'));
+        if Assigned(FocusAfterDelete) then
+          FocusAfterDelete := Grid.GetNext(FocusAfterDelete);
+        // Remove nodes and select some nearby node
+        Grid.BeginUpdate;
+        for i:=Low(Nodes) to High(Nodes) do
+          Grid.DeleteNode(Nodes[i]);
+        Grid.EndUpdate;
+        if not Assigned(FocusAfterDelete) then
+          FocusAfterDelete := Grid.GetLast;
+        if Assigned(FocusAfterDelete) then
+          SelectNode(Grid, FocusAfterDelete);
+        DisplayRowCountStats(Grid);
+        ValidateControls(Sender);
+      finally
+        if MonitorContext <> nil then begin
+          try
+            MonitorContext.SendCompletion(Results.Connection, TotalDurationMs);
+          except
+            on E:Exception do
+              Results.Connection.Log(lcError, SqlMonitorTranslate('SQL monitor completion callback failed: ') + E.Message);
+          end;
+        end;
+        MonitorContext.Free;
+        StatementSql.Free;
       end;
-      ShowStatusMsg(_('Clean up ...'));
-      if Assigned(FocusAfterDelete) then
-        FocusAfterDelete := Grid.GetNext(FocusAfterDelete);
-      // Remove nodes and select some nearby node
-      Grid.BeginUpdate;
-      for i:=Low(Nodes) to High(Nodes) do
-        Grid.DeleteNode(Nodes[i]);
-      Grid.EndUpdate;
-      if not Assigned(FocusAfterDelete) then
-        FocusAfterDelete := Grid.GetLast;
-      if Assigned(FocusAfterDelete) then
-        SelectNode(Grid, FocusAfterDelete);
-      DisplayRowCountStats(Grid);
-      ValidateControls(Sender);
     end;
   except on E:EDbError do begin
       SetProgressState(pbsError);
@@ -13353,6 +13402,8 @@ begin
   if AppSettings.PortableMode then
     Cap := Cap + ' Portable';
   Cap := Cap + ' ' + FAppVersion;
+  if CUSTOM_BUILD_LABEL <> '' then
+    Cap := Cap + ' - ' + CUSTOM_BUILD_LABEL;
   Caption := Cap;
   Application.Title := Cap;
 end;

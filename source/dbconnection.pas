@@ -849,9 +849,10 @@ type
       function IsFunction(Column: Integer): Boolean;
       function HasResult: Boolean; virtual; abstract;
       function GetWhereClause: String;
+      function BuildDeleteStatement: String;
       procedure CheckEditable;
       function IsEditable: Boolean;
-      procedure DeleteRow;
+      procedure DeleteRow(const PreparedSql: String=''; MonitorContext: TObject=nil; StatementIndex: Integer=0);
       function InsertRow: Int64;
       procedure SetCol(Column: Integer; NewText: String; Null: Boolean; IsFunction: Boolean);
       function EnsureFullRow(Refresh: Boolean): Boolean;
@@ -9412,25 +9413,48 @@ begin
 end;
 
 
-procedure TDBQuery.DeleteRow;
+function TDBQuery.BuildDeleteStatement: String;
+var
+  IsVirtual: Boolean;
+begin
+  PrepareEditing;
+  IsVirtual := Assigned(FCurrentUpdateRow) and FCurrentUpdateRow.Inserted;
+  if IsVirtual then
+    Result := ''
+  else
+    Result := GridQuery('DELETE', 'FROM ' + QuotedDbAndTableName + ' WHERE ' + GetWhereClause);
+end;
+
+
+procedure TDBQuery.DeleteRow(const PreparedSql: String=''; MonitorContext: TObject=nil; StatementIndex: Integer=0);
 var
   sql: String;
   IsVirtual: Boolean;
   TempRowsAffected, ExecutedRowsAffected, ExecutedRowsFound: Int64;
   ExecutedDurationMs: Cardinal;
-  MonitorContext: TSqlMonitorExecutionContext;
+  LocalMonitorContext, ActiveMonitorContext: TSqlMonitorExecutionContext;
   StatementRecorded: Boolean;
 begin
   // Delete current row from result
   PrepareEditing;
   IsVirtual := Assigned(FCurrentUpdateRow) and FCurrentUpdateRow.Inserted;
   if not IsVirtual then begin
-    sql := GridQuery('DELETE', 'FROM ' + QuotedDbAndTableName + ' WHERE ' + GetWhereClause);
-    MonitorContext := nil;
+    if PreparedSql = '' then
+      sql := BuildDeleteStatement
+    else
+      sql := PreparedSql;
+    LocalMonitorContext := nil;
+    if Assigned(MonitorContext) then
+      ActiveMonitorContext := MonitorContext as TSqlMonitorExecutionContext
+    else
+      ActiveMonitorContext := nil;
     StatementRecorded := False;
     ExecutedDurationMs := 0;
-    if not SqlMonitorPrepareSingleExecution(Connection, sql, MonitorContext) then
-      Exit;
+    if ActiveMonitorContext = nil then begin
+      if not SqlMonitorPrepareSingleExecution(Connection, sql, LocalMonitorContext) then
+        Exit;
+      ActiveMonitorContext := LocalMonitorContext;
+    end;
     try
       try
         Connection.Query(sql);
@@ -9441,28 +9465,28 @@ begin
         Connection.ShowWarnings;
         if TempRowsAffected = 0 then
           raise EDbError.Create(FormatNumber(TempRowsAffected)+' rows deleted when that should have been 1.');
-        if MonitorContext <> nil then begin
-          MonitorContext.MarkStatementResult(0, True, ExecutedDurationMs, ExecutedRowsAffected, ExecutedRowsFound, '');
+        if ActiveMonitorContext <> nil then begin
+          ActiveMonitorContext.MarkStatementResult(StatementIndex, True, ExecutedDurationMs, ExecutedRowsAffected, ExecutedRowsFound, '');
           StatementRecorded := True;
         end;
       except
         on E:Exception do begin
           ExecutedDurationMs := Connection.LastQueryDuration + Connection.LastQueryNetworkDuration;
-          if (MonitorContext <> nil) and (not StatementRecorded) then
-            MonitorContext.MarkStatementResult(0, False, ExecutedDurationMs, Connection.RowsAffected, Connection.RowsFound, E.Message);
+          if (ActiveMonitorContext <> nil) and (not StatementRecorded) then
+            ActiveMonitorContext.MarkStatementResult(StatementIndex, False, ExecutedDurationMs, Connection.RowsAffected, Connection.RowsFound, E.Message);
           raise;
         end;
       end;
     finally
-      if MonitorContext <> nil then begin
+      if LocalMonitorContext <> nil then begin
         try
-          MonitorContext.SendCompletion(Connection, ExecutedDurationMs);
+          LocalMonitorContext.SendCompletion(Connection, ExecutedDurationMs);
         except
           on E:Exception do
             Connection.Log(lcError, SqlMonitorTranslate('SQL monitor completion callback failed: ') + E.Message);
         end;
       end;
-      MonitorContext.Free;
+      LocalMonitorContext.Free;
     end;
   end;
   if Assigned(FCurrentUpdateRow) then begin
