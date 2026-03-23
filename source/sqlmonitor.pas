@@ -1437,6 +1437,17 @@ var
   StartTick, NextPoll, ElapsedSeconds: Cardinal;
   LastError: String;
   OwnerWasEnabled: Boolean;
+  StatusRect: TRect;
+
+  procedure UpdateStatusLayout;
+  begin
+    StatusRect := Rect(0, 0, StatusLabel.Width, 0);
+    DrawText(StatusLabel.Canvas.Handle, PChar(StatusLabel.Caption), Length(StatusLabel.Caption), StatusRect,
+      DT_CALCRECT or DT_WORDBREAK or DT_LEFT);
+    StatusLabel.Height := StatusRect.Bottom - StatusRect.Top + 4;
+    HintMemo.Top := StatusLabel.Top + StatusLabel.Height + 12;
+    HintMemo.Height := Dialog.ClientHeight - HintMemo.Top - 56;
+  end;
 begin
   Response := nil;
   Result := False;
@@ -1455,18 +1466,16 @@ begin
 
     StatusLabel := TLabel.Create(Dialog);
     StatusLabel.Parent := Dialog;
-    StatusLabel.Left := 16;
-    StatusLabel.Top := 16;
-    StatusLabel.Width := Dialog.ClientWidth - 32;
+    StatusLabel.SetBounds(16, 16, Dialog.ClientWidth - 32, 24);
+    StatusLabel.Anchors := [akLeft, akTop, akRight];
+    StatusLabel.AutoSize := False;
     StatusLabel.WordWrap := True;
     StatusLabel.Caption := SqlMonitorTranslate('Submitting SQL approval request ...');
 
     HintMemo := TMemo.Create(Dialog);
     HintMemo.Parent := Dialog;
     HintMemo.Left := 16;
-    HintMemo.Top := 56;
     HintMemo.Width := Dialog.ClientWidth - 32;
-    HintMemo.Height := Dialog.ClientHeight - 112;
     HintMemo.Anchors := [akLeft, akTop, akRight, akBottom];
     HintMemo.ReadOnly := True;
     HintMemo.ScrollBars := ssVertical;
@@ -1481,6 +1490,8 @@ begin
     CancelButton.Width := 90;
     CancelButton.Caption := _('Cancel');
     CancelButton.OnClick := WaitState.HandleCancel;
+
+    UpdateStatusLayout;
 
     OwnerWasEnabled := Assigned(MainForm) and MainForm.Enabled;
     if OwnerWasEnabled then
@@ -1522,6 +1533,7 @@ begin
         HintMemo.Lines.Text := SqlMonitorTranslate('The SQL statement will only run after centralized approval succeeds.')
       else
         HintMemo.Lines.Text := SqlMonitorTranslate('Last polling error: ') + LastError;
+      UpdateStatusLayout;
       Sleep(100);
     end;
 
