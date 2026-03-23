@@ -267,7 +267,7 @@ function EnumFixedProc(lpelf: PEnumLogFont; lpntm: PNewTextMetric; FontType: Int
 
 
 implementation
-uses main, apphelpers;
+uses main, apphelpers, sqlmonitor;
 {$R *.DFM}
 
 
@@ -376,6 +376,7 @@ begin
   AppSettings.WriteString(asWebSearchBaseUrl, comboWebSearchBaseUrl.Text);
   AppSettings.WriteString(asSqlMonitorUrl, editSqlMonitorUrl.Text);
   AppSettings.WriteString(asSqlMonitorApiKey, editSqlMonitorApiKey.Text);
+  SqlMonitorRefreshConfiguration;
 
   AppSettings.WriteInt(asMaxQueryResults, updownMaxQueryResults.Position);
   // Save color settings
@@ -734,8 +735,13 @@ begin
   comboTheme.ItemIndex := comboTheme.Items.IndexOf(AppSettings.ReadString(asTheme));
   comboIconPack.ItemIndex := comboIconPack.Items.IndexOf(AppSettings.ReadString(asIconPack));
   comboWebSearchBaseUrl.Text := AppSettings.ReadString(asWebSearchBaseUrl);
-  editSqlMonitorUrl.Text := AppSettings.ReadString(asSqlMonitorUrl);
-  editSqlMonitorApiKey.Text := AppSettings.ReadString(asSqlMonitorApiKey);
+  AppSettings.StorePath;
+  try
+    editSqlMonitorUrl.Text := AppSettings.ReadString(asSqlMonitorUrl);
+    editSqlMonitorApiKey.Text := AppSettings.ReadString(asSqlMonitorApiKey);
+  finally
+    AppSettings.RestorePath;
+  end;
 
   // Logging
   updownLogLines.Position := AppSettings.ReadInt(asLogsqlnum);

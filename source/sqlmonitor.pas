@@ -99,6 +99,7 @@ type
 function SqlMonitorShouldHandle(Connection: TDBConnection): Boolean;
 function SqlMonitorGetDecisionMessage(Response: TSqlMonitorBatchResponse): String;
 function SqlMonitorTranslate(const MsgId: String): String;
+procedure SqlMonitorRefreshConfiguration;
 function SqlMonitorPrepareExecution(Connection: TDBConnection; StatementSql: TStrings; out Context: TSqlMonitorExecutionContext): Boolean;
 function SqlMonitorPrepareSingleExecution(Connection: TDBConnection; const SQL: String; out Context: TSqlMonitorExecutionContext): Boolean;
 procedure SqlMonitorLogExecutedStatement(Connection: TDBConnection; const SQL: String; DurationMs: Cardinal; RowsAffected, RowsFound: Int64; const TicketNumber: String='');
@@ -124,6 +125,10 @@ type
 var
   SessionRegistrations: TDictionary<NativeUInt, String>;
   SessionRegistrationsLock: TObject;
+  SqlMonitorConfigLock: TObject;
+  SqlMonitorConfigInitialized: Boolean;
+  CachedSqlMonitorUrl: String;
+  CachedSqlMonitorApiKey: String;
   LastTicketNumber: String;
 
 function SqlMonitorTranslate(const MsgId: String): String;
@@ -293,19 +298,68 @@ begin
 end;
 
 
-function GetConfiguredSetting(SettingIndex: TAppSettingIndex; const EnvName: String): String;
+function ReadAppSettingSafely(SettingIndex: TAppSettingIndex): String;
 begin
   Result := '';
-  if Assigned(AppSettings) then
-    Result := Trim(AppSettings.ReadString(SettingIndex));
-  if Result.IsEmpty then
-    Result := Trim(GetEnvironmentVariable(EnvName));
+  if not Assigned(AppSettings) then
+    Exit;
+  System.TMonitor.Enter(AppSettings);
+  try
+    AppSettings.StorePath;
+    try
+      Result := Trim(AppSettings.ReadString(SettingIndex));
+    finally
+      AppSettings.RestorePath;
+    end;
+  finally
+    System.TMonitor.Exit(AppSettings);
+  end;
+end;
+
+
+procedure EnsureSqlMonitorConfigurationLoaded;
+begin
+  System.TMonitor.Enter(SqlMonitorConfigLock);
+  try
+    if SqlMonitorConfigInitialized then
+      Exit;
+    CachedSqlMonitorUrl := ReadAppSettingSafely(asSqlMonitorUrl);
+    if CachedSqlMonitorUrl.IsEmpty then
+      CachedSqlMonitorUrl := Trim(GetEnvironmentVariable('HEIDISQL_SQLMONITOR_URL'));
+    CachedSqlMonitorApiKey := ReadAppSettingSafely(asSqlMonitorApiKey);
+    if CachedSqlMonitorApiKey.IsEmpty then
+      CachedSqlMonitorApiKey := Trim(GetEnvironmentVariable('HEIDISQL_SQLMONITOR_API_KEY'));
+    SqlMonitorConfigInitialized := True;
+  finally
+    System.TMonitor.Exit(SqlMonitorConfigLock);
+  end;
+end;
+
+
+procedure SqlMonitorRefreshConfiguration;
+begin
+  System.TMonitor.Enter(SqlMonitorConfigLock);
+  try
+    SqlMonitorConfigInitialized := False;
+    CachedSqlMonitorUrl := '';
+    CachedSqlMonitorApiKey := '';
+  finally
+    System.TMonitor.Exit(SqlMonitorConfigLock);
+  end;
+end;
+
+
+function GetConfiguredSqlMonitorUrl: String;
+begin
+  EnsureSqlMonitorConfigurationLoaded;
+  Result := CachedSqlMonitorUrl;
 end;
 
 
 function GetSqlMonitorApiKey: String;
 begin
-  Result := GetConfiguredSetting(asSqlMonitorApiKey, 'HEIDISQL_SQLMONITOR_API_KEY');
+  EnsureSqlMonitorConfigurationLoaded;
+  Result := CachedSqlMonitorApiKey;
 end;
 
 
@@ -604,6 +658,7 @@ var
   SummaryMemo: TMemo;
   ConfirmButton, CancelButton: TButton;
   SummaryText, PreviewText: String;
+  IntroRect: TRect;
 begin
   Result := False;
   TicketNumber := '';
@@ -620,33 +675,37 @@ begin
 
     IntroLabel := TLabel.Create(Dialog);
     IntroLabel.Parent := Dialog;
-    IntroLabel.Left := 16;
-    IntroLabel.Top := 16;
-    IntroLabel.Width := Dialog.ClientWidth - 32;
+    IntroLabel.SetBounds(16, 16, Dialog.ClientWidth - 32, 24);
     IntroLabel.Anchors := [akLeft, akTop, akRight];
+    IntroLabel.AutoSize := False;
     IntroLabel.WordWrap := True;
     IntroLabel.Caption := SqlMonitorTranslate('Please enter the ticket number and confirm this SQL write before it is executed.');
+    IntroRect := Rect(0, 0, IntroLabel.Width, 0);
+    DrawText(IntroLabel.Canvas.Handle, PChar(IntroLabel.Caption), Length(IntroLabel.Caption), IntroRect,
+      DT_CALCRECT or DT_WORDBREAK or DT_LEFT);
+    IntroLabel.Height := IntroRect.Bottom - IntroRect.Top + 4;
 
     TicketLabel := TLabel.Create(Dialog);
     TicketLabel.Parent := Dialog;
     TicketLabel.Left := 16;
-    TicketLabel.Top := 64;
+    TicketLabel.Top := IntroLabel.Top + IntroLabel.Height + 12;
     TicketLabel.Caption := SqlMonitorTranslate('Ticket number');
 
     TicketEdit := TEdit.Create(Dialog);
     TicketEdit.Parent := Dialog;
     TicketEdit.Left := 16;
-    TicketEdit.Top := 84;
+    TicketEdit.Top := TicketLabel.Top + TicketLabel.Height + 6;
     TicketEdit.Width := Dialog.ClientWidth - 32;
     TicketEdit.Anchors := [akLeft, akTop, akRight];
     TicketEdit.Text := LastTicketNumber;
+    TicketLabel.FocusControl := TicketEdit;
 
     SummaryMemo := TMemo.Create(Dialog);
     SummaryMemo.Parent := Dialog;
     SummaryMemo.Left := 16;
-    SummaryMemo.Top := 120;
+    SummaryMemo.Top := TicketEdit.Top + TicketEdit.Height + 12;
     SummaryMemo.Width := Dialog.ClientWidth - 32;
-    SummaryMemo.Height := Dialog.ClientHeight - 176;
+    SummaryMemo.Height := Dialog.ClientHeight - SummaryMemo.Top - 56;
     SummaryMemo.Anchors := [akLeft, akTop, akRight, akBottom];
     SummaryMemo.ReadOnly := True;
     SummaryMemo.ScrollBars := ssVertical;
@@ -1062,7 +1121,7 @@ end;
 
 class function TSqlMonitorClient.BaseUrl: String;
 begin
-  Result := NormalizeUrl(GetConfiguredSetting(asSqlMonitorUrl, 'HEIDISQL_SQLMONITOR_URL'));
+  Result := NormalizeUrl(GetConfiguredSqlMonitorUrl);
 end;
 
 
@@ -1502,10 +1561,12 @@ end;
 initialization
   SessionRegistrations := TDictionary<NativeUInt, String>.Create;
   SessionRegistrationsLock := TObject.Create;
+  SqlMonitorConfigLock := TObject.Create;
 
 finalization
   SessionRegistrations.Free;
   SessionRegistrationsLock.Free;
+  SqlMonitorConfigLock.Free;
 
 end.
 
