@@ -852,7 +852,7 @@ type
       function BuildDeleteStatement: String;
       procedure CheckEditable;
       function IsEditable: Boolean;
-      procedure DeleteRow(const PreparedSql: String=''; MonitorContext: TObject=nil; StatementIndex: Integer=0);
+      function DeleteRow(const PreparedSql: String=''; MonitorContext: TObject=nil; StatementIndex: Integer=0): Boolean;
       function InsertRow: Int64;
       procedure SetCol(Column: Integer; NewText: String; Null: Boolean; IsFunction: Boolean);
       function EnsureFullRow(Refresh: Boolean): Boolean;
@@ -9426,7 +9426,7 @@ begin
 end;
 
 
-procedure TDBQuery.DeleteRow(const PreparedSql: String=''; MonitorContext: TObject=nil; StatementIndex: Integer=0);
+function TDBQuery.DeleteRow(const PreparedSql: String=''; MonitorContext: TObject=nil; StatementIndex: Integer=0): Boolean;
 var
   sql: String;
   IsVirtual: Boolean;
@@ -9435,6 +9435,7 @@ var
   LocalMonitorContext, ActiveMonitorContext: TSqlMonitorExecutionContext;
   StatementRecorded: Boolean;
 begin
+  Result := False;
   // Delete current row from result
   PrepareEditing;
   IsVirtual := Assigned(FCurrentUpdateRow) and FCurrentUpdateRow.Inserted;
@@ -9452,7 +9453,7 @@ begin
     ExecutedDurationMs := 0;
     if ActiveMonitorContext = nil then begin
       if not SqlMonitorPrepareSingleExecution(Connection, sql, LocalMonitorContext) then
-        Exit;
+        Exit(False);
       ActiveMonitorContext := LocalMonitorContext;
     end;
     try
@@ -9494,6 +9495,7 @@ begin
     FCurrentUpdateRow := nil;
     FRecNo := -1;
   end;
+  Result := True;
 end;
 
 

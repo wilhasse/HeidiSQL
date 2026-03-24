@@ -4523,7 +4523,8 @@ var
   StatementSql: TStringList;
   MonitorContext: TSqlMonitorExecutionContext;
   TotalDurationMs: Cardinal;
-  UseBatchDelete: Boolean;
+  UseBatchDelete, DeleteExecuted: Boolean;
+  DeletedCount: Integer;
   i: Integer;
 begin
   // Delete row(s)
@@ -4539,6 +4540,7 @@ begin
       StatementSql := TStringList.Create;
       MonitorContext := nil;
       TotalDurationMs := 0;
+      DeletedCount := 0;
       try
         Node := GetNextNode(Grid, nil, True);
         while Assigned(Node) do begin
@@ -4547,7 +4549,6 @@ begin
           StatementSql.Add(Results.BuildDeleteStatement);
           SetLength(Nodes, Length(Nodes)+1);
           Nodes[Length(Nodes)-1] := Node;
-          FocusAfterDelete := Node;
           Node := GetNextNode(Grid, Node, True);
         end;
 
@@ -4572,27 +4573,33 @@ begin
           ShowStatusMsg(f_('Deleting row #%s of %s ...', [FormatNumber(ProgressBarStatus.Position+1), FormatNumber(ProgressBarStatus.Max)]));
           Results.RecNo := RowNum^;
           if UseBatchDelete then
-            Results.DeleteRow(StatementSql[i], MonitorContext, i)
+            DeleteExecuted := Results.DeleteRow(StatementSql[i], MonitorContext, i)
           else
-            Results.DeleteRow;
+            DeleteExecuted := Results.DeleteRow;
+          if not DeleteExecuted then
+            Break;
+          FocusAfterDelete := Nodes[i];
+          Inc(DeletedCount);
           Inc(TotalDurationMs, Results.Connection.LastQueryDuration + Results.Connection.LastQueryNetworkDuration);
           ProgressStep;
         end;
 
-        ShowStatusMsg(_('Clean up ...'));
-        if Assigned(FocusAfterDelete) then
-          FocusAfterDelete := Grid.GetNext(FocusAfterDelete);
-        // Remove nodes and select some nearby node
-        Grid.BeginUpdate;
-        for i:=Low(Nodes) to High(Nodes) do
-          Grid.DeleteNode(Nodes[i]);
-        Grid.EndUpdate;
-        if not Assigned(FocusAfterDelete) then
-          FocusAfterDelete := Grid.GetLast;
-        if Assigned(FocusAfterDelete) then
-          SelectNode(Grid, FocusAfterDelete);
-        DisplayRowCountStats(Grid);
-        ValidateControls(Sender);
+        if DeletedCount > 0 then begin
+          ShowStatusMsg(_('Clean up ...'));
+          if Assigned(FocusAfterDelete) then
+            FocusAfterDelete := Grid.GetNext(FocusAfterDelete);
+          // Remove nodes and select some nearby node
+          Grid.BeginUpdate;
+          for i:=0 to DeletedCount-1 do
+            Grid.DeleteNode(Nodes[i]);
+          Grid.EndUpdate;
+          if not Assigned(FocusAfterDelete) then
+            FocusAfterDelete := Grid.GetLast;
+          if Assigned(FocusAfterDelete) then
+            SelectNode(Grid, FocusAfterDelete);
+          DisplayRowCountStats(Grid);
+          ValidateControls(Sender);
+        end;
       finally
         if MonitorContext <> nil then begin
           try

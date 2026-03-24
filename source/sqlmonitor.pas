@@ -129,7 +129,6 @@ var
   SqlMonitorConfigInitialized: Boolean;
   CachedSqlMonitorUrl: String;
   CachedSqlMonitorApiKey: String;
-  LastTicketNumber: String;
 
 function SqlMonitorTranslate(const MsgId: String): String;
 var
@@ -187,14 +186,12 @@ begin
     Result := 'Confirmar escrita SQL'
   else if SameText(MsgId, 'Ticket number') then
     Result := 'Numero do chamado'
-  else if SameText(MsgId, 'Please enter the ticket number and confirm this SQL write before it is executed.') then
-    Result := 'Informe o numero do chamado e confirme esta escrita SQL antes da execucao.'
+  else if SameText(MsgId, 'Confirm this SQL write before it is executed. You may also inform a ticket number.') then
+    Result := 'Confirme esta escrita SQL antes da execucao. Se desejar, informe tambem o numero do chamado.'
   else if SameText(MsgId, 'This write will wait for centralized approval after you confirm the ticket number.') then
     Result := 'Esta escrita aguardara aprovacao centralizada apos a confirmacao do numero do chamado.'
   else if SameText(MsgId, 'This write will be logged centrally after you confirm the ticket number.') then
     Result := 'Esta escrita sera registrada no monitor centralizado apos a confirmacao do numero do chamado.'
-  else if SameText(MsgId, 'Ticket number is required before continuing.') then
-    Result := 'O numero do chamado e obrigatorio antes de continuar.'
   else if SameText(MsgId, 'Confirm') then
     Result := 'Confirmar'
   else if SameText(MsgId, 'Central SQL monitor blocked execution') then
@@ -639,14 +636,16 @@ begin
   PreviewCount := Min(StatementSql.Count, 4);
   for i:=0 to PreviewCount-1 do begin
     Line := Trim(StringReplace(StringReplace(StatementSql[i], #13, ' ', [rfReplaceAll]), #10, ' ', [rfReplaceAll]));
+    if (Line <> '') and (Line[Length(Line)] <> ';') then
+      Line := Line + ';';
     if Length(Line) > 180 then
       Line := Copy(Line, 1, 177) + '...';
     if Result <> '' then
-      Result := Result + sLineBreak + sLineBreak;
+      Result := Result + sLineBreak;
     Result := Result + IntToStr(i+1) + '. ' + Line;
   end;
   if StatementSql.Count > PreviewCount then
-    Result := Result + sLineBreak + sLineBreak + '...';
+    Result := Result + sLineBreak + '...';
 end;
 
 
@@ -679,7 +678,7 @@ begin
     IntroLabel.Anchors := [akLeft, akTop, akRight];
     IntroLabel.AutoSize := False;
     IntroLabel.WordWrap := True;
-    IntroLabel.Caption := SqlMonitorTranslate('Please enter the ticket number and confirm this SQL write before it is executed.');
+    IntroLabel.Caption := SqlMonitorTranslate('Confirm this SQL write before it is executed. You may also inform a ticket number.');
     IntroRect := Rect(0, 0, IntroLabel.Width, 0);
     DrawText(IntroLabel.Canvas.Handle, PChar(IntroLabel.Caption), Length(IntroLabel.Caption), IntroRect,
       DT_CALCRECT or DT_WORDBREAK or DT_LEFT);
@@ -697,7 +696,7 @@ begin
     TicketEdit.Top := TicketLabel.Top + TicketLabel.Height + 6;
     TicketEdit.Width := Dialog.ClientWidth - 32;
     TicketEdit.Anchors := [akLeft, akTop, akRight];
-    TicketEdit.Text := LastTicketNumber;
+    TicketEdit.Text := '';
     TicketLabel.FocusControl := TicketEdit;
 
     SummaryMemo := TMemo.Create(Dialog);
@@ -743,18 +742,10 @@ begin
     CancelButton.ModalResult := mrCancel;
 
     Dialog.ActiveControl := TicketEdit;
-    repeat
-      if Dialog.ShowModal <> mrOk then
-        Exit(False);
-      TicketNumber := Trim(TicketEdit.Text);
-      if not TicketNumber.IsEmpty then begin
-        LastTicketNumber := TicketNumber;
-        Result := True;
-        Break;
-      end;
-      SqlMonitorShowError(SqlMonitorTranslate('Confirm SQL write'), SqlMonitorTranslate('Ticket number is required before continuing.'));
-      Dialog.ActiveControl := TicketEdit;
-    until False;
+    if Dialog.ShowModal <> mrOk then
+      Exit(False);
+    TicketNumber := Trim(TicketEdit.Text);
+    Result := True;
   finally
     Dialog.Free;
   end;
@@ -1437,17 +1428,6 @@ var
   StartTick, NextPoll, ElapsedSeconds: Cardinal;
   LastError: String;
   OwnerWasEnabled: Boolean;
-  StatusRect: TRect;
-
-  procedure UpdateStatusLayout;
-  begin
-    StatusRect := Rect(0, 0, StatusLabel.Width, 0);
-    DrawText(StatusLabel.Canvas.Handle, PChar(StatusLabel.Caption), Length(StatusLabel.Caption), StatusRect,
-      DT_CALCRECT or DT_WORDBREAK or DT_LEFT);
-    StatusLabel.Height := StatusRect.Bottom - StatusRect.Top + 4;
-    HintMemo.Top := StatusLabel.Top + StatusLabel.Height + 12;
-    HintMemo.Height := Dialog.ClientHeight - HintMemo.Top - 56;
-  end;
 begin
   Response := nil;
   Result := False;
@@ -1469,13 +1449,14 @@ begin
     StatusLabel.SetBounds(16, 16, Dialog.ClientWidth - 32, 24);
     StatusLabel.Anchors := [akLeft, akTop, akRight];
     StatusLabel.AutoSize := False;
-    StatusLabel.WordWrap := True;
+    StatusLabel.WordWrap := False;
+    StatusLabel.ShowAccelChar := False;
     StatusLabel.Caption := SqlMonitorTranslate('Submitting SQL approval request ...');
 
     HintMemo := TMemo.Create(Dialog);
     HintMemo.Parent := Dialog;
-    HintMemo.Left := 16;
-    HintMemo.Width := Dialog.ClientWidth - 32;
+    HintMemo.SetBounds(16, StatusLabel.Top + StatusLabel.Height + 12, Dialog.ClientWidth - 32,
+      Dialog.ClientHeight - StatusLabel.Top - StatusLabel.Height - 68);
     HintMemo.Anchors := [akLeft, akTop, akRight, akBottom];
     HintMemo.ReadOnly := True;
     HintMemo.ScrollBars := ssVertical;
@@ -1488,10 +1469,9 @@ begin
     CancelButton.Left := Dialog.ClientWidth - 110;
     CancelButton.Top := Dialog.ClientHeight - 45;
     CancelButton.Width := 90;
+    CancelButton.Anchors := [akRight, akBottom];
     CancelButton.Caption := _('Cancel');
     CancelButton.OnClick := WaitState.HandleCancel;
-
-    UpdateStatusLayout;
 
     OwnerWasEnabled := Assigned(MainForm) and MainForm.Enabled;
     if OwnerWasEnabled then
@@ -1533,7 +1513,6 @@ begin
         HintMemo.Lines.Text := SqlMonitorTranslate('The SQL statement will only run after centralized approval succeeds.')
       else
         HintMemo.Lines.Text := SqlMonitorTranslate('Last polling error: ') + LastError;
-      UpdateStatusLayout;
       Sleep(100);
     end;
 
