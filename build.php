@@ -162,6 +162,7 @@ if(empty($gitCommits)) {
 }
 $lastCommitRevision = count($gitCommits) + 671; // The number of earlier Subversion commits which I could not migrate to Git
 $lastCommitHash = substr($gitCommits[0], 0, strpos($gitCommits[0], ' '));
+$lastCommitHashShort = substr($lastCommitHash, 0, 8);
 
 // start the build process
 dumpMessage('Compile commit '.$lastCommitHash.' (revision '.$lastCommitRevision.')', true);
@@ -195,8 +196,11 @@ foreach($compileBits as $bit)
 
     chdir(BASE_DIR);
     $versionFile = realpath('res\\version.rc');
+    $buildInfoFile = realpath('source\\buildinfo.inc');
     dumpMessage('Revert version resource file...', true);
     execCommand('git checkout '.$versionFile);
+    dumpMessage('Revert build info include...');
+    execCommand('git checkout '.$buildInfoFile);
     dumpMessage('Modify version resource file...');
     $versionOriginal = file_get_contents($versionFile);
     $versionRevision = preg_replace('#(FILEVERSION\s+\d+,\d+,\d+,)(\d+)(\b)#i', '${1}'.$lastCommitRevision.'$3', $versionOriginal);
@@ -206,6 +210,10 @@ foreach($compileBits as $bit)
     $fullVersion = $shortVersion.' '.$bit.' Bit';
     $versionRevision = str_replace('%APPVER%', $fullVersion, $versionRevision);
     file_put_contents($versionFile, $versionRevision);
+    dumpMessage('Modify build info include...');
+    $buildInfoOriginal = file_get_contents($buildInfoFile);
+    $buildInfoPatched = str_replace('%GITCOMMIT%', $lastCommitHashShort, $buildInfoOriginal);
+    file_put_contents($buildInfoFile, $buildInfoPatched);
 
     dumpMessage('Compile resource files...', true);
     execCommand('"'.COMPILER_DIR . 'brcc32.exe" '.$versionFile);
@@ -235,6 +243,9 @@ foreach($compileBits as $bit)
     $renameTo = sprintf('out\\%s%d.exe', BIN_NAME, $bit);
     dumpMessage('Rename to '.$renameTo.'...', true);
     rename('out\\'.BIN_NAME.'.exe', $renameTo);
+    dumpMessage('Revert temporary build files...');
+    execCommand('git checkout '.$versionFile);
+    execCommand('git checkout '.$buildInfoFile);
 
 }
 

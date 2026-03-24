@@ -2,7 +2,7 @@
 setlocal
 
 set "SCRIPT_DIR=%~dp0"
-set "SOURCE_EXE=%SCRIPT_DIR%out\heidisql.exe"
+set "SOURCE_EXE=%SCRIPT_DIR%out\heidisql64.exe"
 set "TARGET_DIR=C:\Program Files\HeidiSQL"
 set "TARGET_EXE=%TARGET_DIR%\heidisql.exe"
 

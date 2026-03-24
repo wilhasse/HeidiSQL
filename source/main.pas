@@ -24,9 +24,7 @@ uses
   SynEditCodeFolding, SynEditStrConst, texteditor, System.Character, generic_types, Sequal.Suggest,
   VirtualTrees.BaseAncestorVCL, VirtualTrees.BaseTree, VirtualTrees.AncestorVCL;
 
-const
-  CUSTOM_BUILD_LABEL = 'cslog de66f37c';
-
+{$I buildinfo.inc}
 
 type
 
@@ -13409,7 +13407,7 @@ begin
   if AppSettings.PortableMode then
     Cap := Cap + ' Portable';
   Cap := Cap + ' ' + FAppVersion;
-  if CUSTOM_BUILD_LABEL <> '' then
+  if (CUSTOM_BUILD_LABEL <> '') and (Pos('%', CUSTOM_BUILD_LABEL) = 0) then
     Cap := Cap + ' - ' + CUSTOM_BUILD_LABEL;
   Caption := Cap;
   Application.Title := Cap;
