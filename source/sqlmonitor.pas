@@ -9,9 +9,23 @@ uses
 type
   ESqlMonitorError = class(Exception);
 
+  ESqlMonitorHttpError = class(ESqlMonitorError)
+  public
+    StatusCode: Integer;
+    constructor Create(AStatusCode: Integer; const Msg: String);
+  end;
+
   TSqlMonitorBatchStatus = (smbsUnknown, smbsLogged, smbsPending, smbsApproved, smbsRejected, smbsCancelled, smbsError);
   TSqlMonitorStatementKind = (smskUnknown, smskSelect, smskInsert, smskUpdate, smskDelete, smskOther);
   TSqlMonitorStatementDecision = (smsdUnknown, smsdLogged, smsdPending, smsdApproved, smsdRejected, smsdCancelled);
+  TSqlMonitorCredentialMode = (smcmBypass, smcmManaged);
+
+  TSqlMonitorCredentialResponse = record
+    Mode: TSqlMonitorCredentialMode;
+    DbUser: String;
+    DbPassword: String;
+    Reason: String;
+  end;
 
   TSqlMonitorStatementInfo = class(TObject)
   public
@@ -72,33 +86,44 @@ type
   TSqlMonitorClient = class(TObject)
   private
     FOwner: TComponent;
+    function BuildAuthLoginPayload(const Username, Password: String): String;
+    function BuildCredentialResolvePayload(Connection: TDBConnection): String;
     function BuildSessionPayload(Connection: TDBConnection; const DatabaseName: String): String;
     function BuildTargetJson(Connection: TDBConnection; const DatabaseName: String): TJSONObject;
     function BuildExecutionPayload(Connection: TDBConnection; const SQL, TicketNumber: String; DurationMs: Cardinal; RowsAffected, RowsFound: Int64; Success: Boolean; const ErrorMessage: String): String;
     function BuildRequestPayload(Connection: TDBConnection; StatementSql: TStrings; const TicketNumber: String): String;
     function ParseBatchResponse(const JsonText: String): TSqlMonitorBatchResponse;
+    function ParseCredentialResponse(const JsonText: String): TSqlMonitorCredentialResponse;
     function SendJsonRequest(const URL, Method, Payload: String; out ResponseText: String;
       TimeOutSeconds: Cardinal=0): Integer;
   public
     constructor Create(AOwner: TComponent);
     class function ApprovalTimeoutMs: Cardinal; static;
     class function BaseUrl: String; static;
+    class function CentralAuthEnabled: Boolean; static;
     class function IsConfigured: Boolean; static;
     class function PollIntervalMs: Cardinal; static;
     class function SessionTimeoutSeconds: Cardinal; static;
+    class function SupportsCentralAuthConnection(Connection: TDBConnection): Boolean; static;
     class function SupportsConnection(Connection: TDBConnection): Boolean; static;
+    class function SupportsSessionConnection(Connection: TDBConnection): Boolean; static;
     class function TryGetSettingInt(const Name: String; DefaultValue: Integer): Integer; static;
     function CancelRequest(const RequestId: String): Boolean;
     function CompleteRequest(Connection: TDBConnection; Context: TSqlMonitorExecutionContext; TotalDurationMs: Cardinal): Boolean;
     function CreateRequest(Connection: TDBConnection; StatementSql: TStrings; const TicketNumber: String=''): TSqlMonitorBatchResponse;
     function GetRequestStatus(const RequestId: String): TSqlMonitorBatchResponse;
+    function LoginCentralAuth(const Username, Password: String; out ActorId, AuthToken: String; out ExpiresAt: TDateTime): Boolean;
     function RegisterSession(Connection: TDBConnection; const DatabaseName: String): Boolean;
+    function ResolveDbCredentials(Connection: TDBConnection): TSqlMonitorCredentialResponse;
     function WaitForDecision(const RequestId: String; out Response: TSqlMonitorBatchResponse): Boolean;
   end;
 
+function SqlMonitorCentralAuthEnabled: Boolean;
 function SqlMonitorShouldHandle(Connection: TDBConnection): Boolean;
+function SqlMonitorEnsureStartupAuthentication: Boolean;
 function SqlMonitorGetDecisionMessage(Response: TSqlMonitorBatchResponse): String;
 function SqlMonitorTranslate(const MsgId: String): String;
+procedure SqlMonitorPrepareConnectionAuthentication(Connection: TDBConnection);
 procedure SqlMonitorRefreshConfiguration;
 function SqlMonitorPrepareExecution(Connection: TDBConnection; StatementSql: TStrings; out Context: TSqlMonitorExecutionContext): Boolean;
 function SqlMonitorPrepareSingleExecution(Connection: TDBConnection; const SQL: String; out Context: TSqlMonitorExecutionContext): Boolean;
@@ -110,7 +135,7 @@ procedure SqlMonitorShowError(const Title, Msg: String);
 implementation
 
 uses
-  System.Math, Vcl.Controls, Vcl.StdCtrls, Vcl.Dialogs,
+  System.Math, System.DateUtils, Vcl.Controls, Vcl.StdCtrls, Vcl.Dialogs, Vcl.Graphics,
   apphelpers, gnugettext, Main;
 
 {$I const.inc}
@@ -126,9 +151,15 @@ var
   SessionRegistrations: TDictionary<NativeUInt, String>;
   SessionRegistrationsLock: TObject;
   SqlMonitorConfigLock: TObject;
+  SqlMonitorAuthLock: TObject;
   SqlMonitorConfigInitialized: Boolean;
   CachedSqlMonitorUrl: String;
   CachedSqlMonitorApiKey: String;
+  CachedSqlMonitorCentralAuthEnabled: Boolean;
+  CachedCentralAuthActorId: String;
+  CachedCentralAuthExpiresAt: TDateTime;
+  CachedCentralAuthToken: String;
+  CachedCentralAuthUsername: String;
 
 function SqlMonitorTranslate(const MsgId: String): String;
 var
@@ -201,8 +232,42 @@ begin
   else if SameText(MsgId, 'Central SQL write registration failed') then
     Result := 'Falha no registro centralizado da escrita SQL'
   else if SameText(MsgId, 'Central SQL write registration failed.') then
-    Result := 'Falha no registro centralizado da escrita SQL.';
+    Result := 'Falha no registro centralizado da escrita SQL.'
+  else if SameText(MsgId, 'Use centralized AD authentication') then
+    Result := 'Usar autenticacao AD centralizada'
+  else if SameText(MsgId, 'Centralized AD authentication') then
+    Result := 'Autenticacao AD centralizada'
+  else if SameText(MsgId, 'Sign in with your Active Directory credentials to continue.') then
+    Result := 'Informe suas credenciais do Active Directory para continuar.'
+  else if SameText(MsgId, 'User name') then
+    Result := 'Usuario'
+  else if SameText(MsgId, 'Password') then
+    Result := 'Senha'
+  else if SameText(MsgId, 'Sign in') then
+    Result := 'Entrar'
+  else if SameText(MsgId, 'Centralized AD authentication failed') then
+    Result := 'Falha na autenticacao AD centralizada'
+  else if SameText(MsgId, 'Centralized AD authentication is enabled, but the SQL monitor URL or API key is missing.') then
+    Result := 'A autenticacao AD centralizada esta habilitada, mas falta configurar a URL ou a chave da API do monitor SQL.'
+  else if SameText(MsgId, 'Centralized AD authentication was cancelled by the user.') then
+    Result := 'A autenticacao AD centralizada foi cancelada pelo usuario.'
+  else if SameText(MsgId, 'Centralized AD session expired. Sign in again to continue.') then
+    Result := 'A sessao AD centralizada expirou. Entre novamente para continuar.'
+  else if SameText(MsgId, 'Managed DB credentials were not returned by the central service.') then
+    Result := 'A credencial gerenciada do banco nao foi retornada pelo servico central.'
+  else if SameText(MsgId, 'Centralized AD login did not return an auth token.') then
+    Result := 'A autenticacao AD centralizada nao retornou um token de autenticacao.'
+  else if SameText(MsgId, 'Centralized DB credential resolution returned an invalid mode.') then
+    Result := 'A resolucao centralizada de credencial do banco retornou um modo invalido.';
 end;
+
+
+constructor ESqlMonitorHttpError.Create(AStatusCode: Integer; const Msg: String);
+begin
+  inherited Create(Msg);
+  StatusCode := AStatusCode;
+end;
+
 
 function BatchStatusFromString(const Value: String): TSqlMonitorBatchStatus;
 begin
@@ -255,11 +320,110 @@ begin
 end;
 
 
+function GetCurrentCentralAuthActorId: String;
+begin
+  System.TMonitor.Enter(SqlMonitorAuthLock);
+  try
+    Result := CachedCentralAuthActorId;
+  finally
+    System.TMonitor.Exit(SqlMonitorAuthLock);
+  end;
+end;
+
+
+function GetCurrentCentralAuthToken: String;
+begin
+  System.TMonitor.Enter(SqlMonitorAuthLock);
+  try
+    if (CachedCentralAuthToken <> '') and (CachedCentralAuthExpiresAt > 0) and (CachedCentralAuthExpiresAt <= IncSecond(Now, 5)) then
+      Result := ''
+    else
+      Result := CachedCentralAuthToken;
+  finally
+    System.TMonitor.Exit(SqlMonitorAuthLock);
+  end;
+end;
+
+
+function GetCurrentCentralAuthUsername: String;
+begin
+  System.TMonitor.Enter(SqlMonitorAuthLock);
+  try
+    Result := CachedCentralAuthUsername;
+  finally
+    System.TMonitor.Exit(SqlMonitorAuthLock);
+  end;
+end;
+
+
+function HasValidCentralAuthToken: Boolean;
+begin
+  System.TMonitor.Enter(SqlMonitorAuthLock);
+  try
+    Result := (CachedCentralAuthToken <> '') and ((CachedCentralAuthExpiresAt = 0) or (CachedCentralAuthExpiresAt > IncSecond(Now, 5)));
+  finally
+    System.TMonitor.Exit(SqlMonitorAuthLock);
+  end;
+end;
+
+
+procedure ClearCentralAuthSession;
+begin
+  System.TMonitor.Enter(SqlMonitorAuthLock);
+  try
+    CachedCentralAuthActorId := '';
+    CachedCentralAuthExpiresAt := 0;
+    CachedCentralAuthToken := '';
+    CachedCentralAuthUsername := '';
+  finally
+    System.TMonitor.Exit(SqlMonitorAuthLock);
+  end;
+end;
+
+
+procedure StoreCentralAuthSession(const Username, ActorId, AuthToken: String; ExpiresAt: TDateTime);
+begin
+  System.TMonitor.Enter(SqlMonitorAuthLock);
+  try
+    CachedCentralAuthUsername := Trim(Username);
+    CachedCentralAuthActorId := Trim(ActorId);
+    CachedCentralAuthToken := Trim(AuthToken);
+    CachedCentralAuthExpiresAt := ExpiresAt;
+  finally
+    System.TMonitor.Exit(SqlMonitorAuthLock);
+  end;
+end;
+
+
+function TryParseCentralAuthExpiration(const Value: String; out ParsedValue: TDateTime): Boolean;
+begin
+  Result := False;
+  ParsedValue := 0;
+  if Trim(Value).IsEmpty then
+    Exit;
+  try
+    ParsedValue := ISO8601ToDate(Value, False);
+    Result := True;
+  except
+    try
+      ParsedValue := ISO8601ToDate(Value, True);
+      Result := True;
+    except
+      ParsedValue := 0;
+    end;
+  end;
+end;
+
+
 function GetClientActorId: String;
 var
   UserBufferSize: DWORD;
   UserName, HostName: String;
 begin
+  Result := GetCurrentCentralAuthActorId;
+  if not Result.IsEmpty then
+    Exit;
+
   UserBufferSize := 512;
   SetLength(UserName, UserBufferSize);
   if GetUserName(PChar(UserName), UserBufferSize) then
@@ -314,6 +478,25 @@ begin
 end;
 
 
+function ReadAppSettingBoolSafely(SettingIndex: TAppSettingIndex): Boolean;
+begin
+  Result := False;
+  if not Assigned(AppSettings) then
+    Exit;
+  System.TMonitor.Enter(AppSettings);
+  try
+    AppSettings.StorePath;
+    try
+      Result := AppSettings.ReadBool(SettingIndex);
+    finally
+      AppSettings.RestorePath;
+    end;
+  finally
+    System.TMonitor.Exit(AppSettings);
+  end;
+end;
+
+
 procedure EnsureSqlMonitorConfigurationLoaded;
 begin
   System.TMonitor.Enter(SqlMonitorConfigLock);
@@ -326,6 +509,7 @@ begin
     CachedSqlMonitorApiKey := ReadAppSettingSafely(asSqlMonitorApiKey);
     if CachedSqlMonitorApiKey.IsEmpty then
       CachedSqlMonitorApiKey := Trim(GetEnvironmentVariable('HEIDISQL_SQLMONITOR_API_KEY'));
+    CachedSqlMonitorCentralAuthEnabled := ReadAppSettingBoolSafely(asSqlMonitorCentralAuthEnabled);
     SqlMonitorConfigInitialized := True;
   finally
     System.TMonitor.Exit(SqlMonitorConfigLock);
@@ -340,9 +524,11 @@ begin
     SqlMonitorConfigInitialized := False;
     CachedSqlMonitorUrl := '';
     CachedSqlMonitorApiKey := '';
+    CachedSqlMonitorCentralAuthEnabled := False;
   finally
     System.TMonitor.Exit(SqlMonitorConfigLock);
   end;
+  ClearCentralAuthSession;
 end;
 
 
@@ -357,6 +543,13 @@ function GetSqlMonitorApiKey: String;
 begin
   EnsureSqlMonitorConfigurationLoaded;
   Result := CachedSqlMonitorApiKey;
+end;
+
+
+function SqlMonitorCentralAuthEnabled: Boolean;
+begin
+  EnsureSqlMonitorConfigurationLoaded;
+  Result := CachedSqlMonitorCentralAuthEnabled;
 end;
 
 
@@ -570,6 +763,201 @@ begin
     Dialog.ShowModal;
   finally
     Dialog.Free;
+  end;
+end;
+
+
+function PromptForCentralAuthSession(const InitialError: String): Boolean;
+var
+  Dialog: TForm;
+  PromptLabel, ErrorLabel, UserLabel, PasswordLabel: TLabel;
+  UserEdit, PasswordEdit: TEdit;
+  SignInButton, CancelButton: TButton;
+  Client: TSqlMonitorClient;
+  ActorId, AuthToken: String;
+  ExpiresAt: TDateTime;
+begin
+  Result := False;
+  Dialog := TForm.CreateNew(MainForm);
+  try
+    Dialog.Caption := SqlMonitorTranslate('Centralized AD authentication');
+    Dialog.BorderStyle := bsDialog;
+    Dialog.Position := poMainFormCenter;
+    Dialog.Width := 470;
+    Dialog.Height := 250;
+    Dialog.Constraints.MinWidth := 430;
+    Dialog.Constraints.MinHeight := 230;
+    Dialog.BorderIcons := [biSystemMenu];
+
+    PromptLabel := TLabel.Create(Dialog);
+    PromptLabel.Parent := Dialog;
+    PromptLabel.Left := 16;
+    PromptLabel.Top := 16;
+    PromptLabel.Width := Dialog.ClientWidth - 32;
+    PromptLabel.AutoSize := False;
+    PromptLabel.WordWrap := True;
+    PromptLabel.Caption := SqlMonitorTranslate('Sign in with your Active Directory credentials to continue.');
+    PromptLabel.Height := 36;
+    PromptLabel.Anchors := [akLeft, akTop, akRight];
+
+    ErrorLabel := TLabel.Create(Dialog);
+    ErrorLabel.Parent := Dialog;
+    ErrorLabel.Left := 16;
+    ErrorLabel.Top := PromptLabel.Top + PromptLabel.Height + 8;
+    ErrorLabel.Width := Dialog.ClientWidth - 32;
+    ErrorLabel.AutoSize := False;
+    ErrorLabel.WordWrap := True;
+    ErrorLabel.Font.Color := clRed;
+    ErrorLabel.Caption := InitialError;
+    ErrorLabel.Height := 34;
+    ErrorLabel.Anchors := [akLeft, akTop, akRight];
+
+    UserLabel := TLabel.Create(Dialog);
+    UserLabel.Parent := Dialog;
+    UserLabel.Left := 16;
+    UserLabel.Top := ErrorLabel.Top + ErrorLabel.Height + 4;
+    UserLabel.Caption := SqlMonitorTranslate('User name');
+
+    UserEdit := TEdit.Create(Dialog);
+    UserEdit.Parent := Dialog;
+    UserEdit.Left := 16;
+    UserEdit.Top := UserLabel.Top + UserLabel.Height + 4;
+    UserEdit.Width := Dialog.ClientWidth - 32;
+    UserEdit.Anchors := [akLeft, akTop, akRight];
+    UserEdit.Text := GetCurrentCentralAuthUsername;
+    UserLabel.FocusControl := UserEdit;
+
+    PasswordLabel := TLabel.Create(Dialog);
+    PasswordLabel.Parent := Dialog;
+    PasswordLabel.Left := 16;
+    PasswordLabel.Top := UserEdit.Top + UserEdit.Height + 8;
+    PasswordLabel.Caption := SqlMonitorTranslate('Password');
+
+    PasswordEdit := TEdit.Create(Dialog);
+    PasswordEdit.Parent := Dialog;
+    PasswordEdit.Left := 16;
+    PasswordEdit.Top := PasswordLabel.Top + PasswordLabel.Height + 4;
+    PasswordEdit.Width := Dialog.ClientWidth - 32;
+    PasswordEdit.Anchors := [akLeft, akTop, akRight];
+    PasswordEdit.PasswordChar := '*';
+    PasswordLabel.FocusControl := PasswordEdit;
+
+    SignInButton := TButton.Create(Dialog);
+    SignInButton.Parent := Dialog;
+    SignInButton.Width := 100;
+    SignInButton.Height := 30;
+    SignInButton.Left := Dialog.ClientWidth - 214;
+    SignInButton.Top := Dialog.ClientHeight - 44;
+    SignInButton.Anchors := [akRight, akBottom];
+    SignInButton.Caption := SqlMonitorTranslate('Sign in');
+    SignInButton.Default := True;
+    SignInButton.ModalResult := mrOk;
+
+    CancelButton := TButton.Create(Dialog);
+    CancelButton.Parent := Dialog;
+    CancelButton.Width := 90;
+    CancelButton.Height := 30;
+    CancelButton.Left := Dialog.ClientWidth - 104;
+    CancelButton.Top := Dialog.ClientHeight - 44;
+    CancelButton.Anchors := [akRight, akBottom];
+    CancelButton.Caption := _('Cancel');
+    CancelButton.Cancel := True;
+    CancelButton.ModalResult := mrCancel;
+
+    if Trim(UserEdit.Text) = '' then
+      Dialog.ActiveControl := UserEdit
+    else
+      Dialog.ActiveControl := PasswordEdit;
+
+    while True do begin
+      if Dialog.ShowModal <> mrOk then
+        Exit(False);
+
+      Client := TSqlMonitorClient.Create(Dialog);
+      try
+        try
+          if Client.LoginCentralAuth(Trim(UserEdit.Text), PasswordEdit.Text, ActorId, AuthToken, ExpiresAt) then begin
+            StoreCentralAuthSession(Trim(UserEdit.Text), ActorId, AuthToken, ExpiresAt);
+            Exit(True);
+          end;
+        except
+          on E:Exception do begin
+            ErrorLabel.Caption := E.Message;
+            PasswordEdit.Text := '';
+            Dialog.ActiveControl := PasswordEdit;
+          end;
+        end;
+      finally
+        Client.Free;
+      end;
+    end;
+  finally
+    Dialog.Free;
+  end;
+end;
+
+
+function SqlMonitorEnsureStartupAuthentication: Boolean;
+begin
+  Result := True;
+  if not SqlMonitorCentralAuthEnabled then
+    Exit;
+  if not TSqlMonitorClient.IsConfigured then begin
+    SqlMonitorShowError(SqlMonitorTranslate('Centralized AD authentication failed'),
+      SqlMonitorTranslate('Centralized AD authentication is enabled, but the SQL monitor URL or API key is missing.'));
+    Exit(False);
+  end;
+  if HasValidCentralAuthToken then
+    Exit(True);
+  Result := PromptForCentralAuthSession('');
+end;
+
+
+procedure SqlMonitorPrepareConnectionAuthentication(Connection: TDBConnection);
+var
+  Client: TSqlMonitorClient;
+  Credentials: TSqlMonitorCredentialResponse;
+  ShouldRetry: Boolean;
+begin
+  if not SqlMonitorCentralAuthEnabled then
+    Exit;
+  if not TSqlMonitorClient.SupportsCentralAuthConnection(Connection) then
+    Exit;
+  if not TSqlMonitorClient.IsConfigured then
+    raise ESqlMonitorError.Create(SqlMonitorTranslate('Centralized AD authentication is enabled, but the SQL monitor URL or API key is missing.'));
+  if not HasValidCentralAuthToken then begin
+    if not PromptForCentralAuthSession('') then
+      raise ESqlMonitorError.Create(SqlMonitorTranslate('Centralized AD authentication was cancelled by the user.'));
+  end;
+
+  Client := TSqlMonitorClient.Create(MainForm);
+  try
+    ShouldRetry := True;
+    while True do begin
+      try
+        Credentials := Client.ResolveDbCredentials(Connection);
+        Break;
+      except
+        on E:ESqlMonitorHttpError do begin
+          if ShouldRetry and (E.StatusCode = 401) then begin
+            ClearCentralAuthSession;
+            ShouldRetry := False;
+            if not PromptForCentralAuthSession(SqlMonitorTranslate('Centralized AD session expired. Sign in again to continue.')) then
+              raise ESqlMonitorError.Create(SqlMonitorTranslate('Centralized AD authentication was cancelled by the user.'));
+            Continue;
+          end;
+          raise;
+        end;
+      end;
+    end;
+  finally
+    Client.Free;
+  end;
+
+  if Credentials.Mode = smcmManaged then begin
+    if Credentials.DbUser.Trim.IsEmpty then
+      raise ESqlMonitorError.Create(SqlMonitorTranslate('Managed DB credentials were not returned by the central service.'));
+    Connection.SetCredentialOverride(Credentials.DbUser, Credentials.DbPassword);
   end;
 end;
 
@@ -926,13 +1314,10 @@ var
   EffectiveDatabase, LastDatabase, Payload: String;
   Client: TSqlMonitorClient;
 begin
-  if not TSqlMonitorClient.SupportsConnection(Connection) then
+  if not TSqlMonitorClient.SupportsSessionConnection(Connection) then
     Exit;
 
   EffectiveDatabase := ResolveTargetDatabase(Connection, DatabaseName);
-  if EffectiveDatabase.IsEmpty then
-    Exit;
-
   ConnectionKey := NativeUInt(Connection);
   System.TMonitor.Enter(SessionRegistrationsLock);
   try
@@ -1116,6 +1501,12 @@ begin
 end;
 
 
+class function TSqlMonitorClient.CentralAuthEnabled: Boolean;
+begin
+  Result := SqlMonitorCentralAuthEnabled;
+end;
+
+
 class function TSqlMonitorClient.IsConfigured: Boolean;
 begin
   Result := (not BaseUrl.IsEmpty) and (not GetSqlMonitorApiKey.IsEmpty);
@@ -1134,15 +1525,73 @@ begin
 end;
 
 
+class function TSqlMonitorClient.SupportsCentralAuthConnection(Connection: TDBConnection): Boolean;
+begin
+  Result := CentralAuthEnabled and IsConfigured and Assigned(Connection)
+    and (not Connection.Parameters.IsAnySQLite)
+    and (not Connection.Parameters.WindowsAuth)
+    and (not Trim(Connection.Parameters.Hostname).IsEmpty);
+end;
+
+
 class function TSqlMonitorClient.SupportsConnection(Connection: TDBConnection): Boolean;
 begin
   Result := IsConfigured and Assigned(Connection) and Connection.Parameters.IsAnyMySQL;
 end;
 
 
+class function TSqlMonitorClient.SupportsSessionConnection(Connection: TDBConnection): Boolean;
+begin
+  Result := IsConfigured and Assigned(Connection) and (not Connection.Parameters.IsAnySQLite)
+    and (not Trim(Connection.Parameters.Hostname).IsEmpty);
+end;
+
+
 class function TSqlMonitorClient.TryGetSettingInt(const Name: String; DefaultValue: Integer): Integer;
 begin
   Result := StrToIntDef(GetEnvironmentVariable(Name), DefaultValue);
+end;
+
+
+function TSqlMonitorClient.BuildAuthLoginPayload(const Username, Password: String): String;
+var
+  RootJson: TJSONObject;
+begin
+  RootJson := TJSONObject.Create;
+  try
+    RootJson.AddPair('client_app', APPNAME);
+    RootJson.AddPair('client_version', GetClientVersion);
+    RootJson.AddPair('client_host', GetClientHostName);
+    RootJson.AddPair('username', Username);
+    RootJson.AddPair('password', Password);
+    Result := RootJson.ToJSON;
+  finally
+    RootJson.Free;
+  end;
+end;
+
+
+function TSqlMonitorClient.BuildCredentialResolvePayload(Connection: TDBConnection): String;
+var
+  RootJson, TargetJson: TJSONObject;
+begin
+  RootJson := TJSONObject.Create;
+  try
+    RootJson.AddPair('client_app', APPNAME);
+    RootJson.AddPair('client_version', GetClientVersion);
+    RootJson.AddPair('client_host', GetClientHostName);
+
+    TargetJson := TJSONObject.Create;
+    TargetJson.AddPair('host', Connection.Parameters.Hostname);
+    TargetJson.AddPair('port', TJSONNumber.Create(GetConnectionTargetPort(Connection)));
+    TargetJson.AddPair('database', ResolveTargetDatabase(Connection, ''));
+    TargetJson.AddPair('db_user', Connection.Parameters.Username);
+    TargetJson.AddPair('net_type', Connection.Parameters.NetTypeName(True));
+    RootJson.AddPair('target', TargetJson);
+    Result := RootJson.ToJSON;
+  finally
+    RootJson.Free;
+  end;
 end;
 
 
@@ -1153,6 +1602,7 @@ begin
   Result.AddPair('port', TJSONNumber.Create(GetConnectionTargetPort(Connection)));
   Result.AddPair('database', ResolveTargetDatabase(Connection, DatabaseName));
   Result.AddPair('db_user', Connection.Parameters.Username);
+  Result.AddPair('net_type', Connection.Parameters.NetTypeName(True));
 end;
 
 
@@ -1162,6 +1612,7 @@ var
 begin
   RootJson := TJSONObject.Create;
   try
+    RootJson.AddPair('client_app', APPNAME);
     RootJson.AddPair('actor_id', GetClientActorId);
     RootJson.AddPair('client_host', GetClientHostName);
     RootJson.AddPair('client_version', GetClientVersion);
@@ -1238,6 +1689,88 @@ begin
   finally
     RootJson.Free;
   end;
+end;
+
+
+function TSqlMonitorClient.LoginCentralAuth(const Username, Password: String; out ActorId, AuthToken: String; out ExpiresAt: TDateTime): Boolean;
+var
+  ResponseText, ExpiresText: String;
+  RootValue: TJSONValue;
+  RootObject: TJSONObject;
+begin
+  Result := False;
+  ActorId := '';
+  AuthToken := '';
+  ExpiresAt := 0;
+
+  SendJsonRequest(BaseUrl + '/v1/auth/login', 'POST', BuildAuthLoginPayload(Username, Password), ResponseText, SessionTimeoutSeconds);
+  RootValue := TJSONObject.ParseJSONValue(ResponseText);
+  if not (RootValue is TJSONObject) then begin
+    RootValue.Free;
+    raise ESqlMonitorError.Create(SqlMonitorTranslate('SQL monitor returned an invalid JSON payload.'));
+  end;
+
+  RootObject := RootValue as TJSONObject;
+  try
+    ActorId := GetJsonString(RootObject, 'actor_id');
+    if ActorId.IsEmpty then
+      ActorId := Trim(Username);
+    AuthToken := GetJsonString(RootObject, 'auth_token');
+    if AuthToken.IsEmpty then
+      raise ESqlMonitorError.Create(SqlMonitorTranslate('Centralized AD login did not return an auth token.'));
+    ExpiresText := GetJsonString(RootObject, 'expires_at');
+    if not TryParseCentralAuthExpiration(ExpiresText, ExpiresAt) then
+      ExpiresAt := IncHour(Now, 8);
+    Result := True;
+  finally
+    RootValue.Free;
+  end;
+end;
+
+
+function TSqlMonitorClient.ParseCredentialResponse(const JsonText: String): TSqlMonitorCredentialResponse;
+var
+  RootValue: TJSONValue;
+  RootObject: TJSONObject;
+  ModeText: String;
+begin
+  Result.Mode := smcmBypass;
+  Result.DbUser := '';
+  Result.DbPassword := '';
+  Result.Reason := '';
+  if JsonText.Trim.IsEmpty then
+    Exit;
+
+  RootValue := TJSONObject.ParseJSONValue(JsonText);
+  if not (RootValue is TJSONObject) then begin
+    RootValue.Free;
+    raise ESqlMonitorError.Create(SqlMonitorTranslate('SQL monitor returned an invalid JSON payload.'));
+  end;
+
+  RootObject := RootValue as TJSONObject;
+  try
+    ModeText := LowerCase(GetJsonString(RootObject, 'mode'));
+    if ModeText = 'managed' then
+      Result.Mode := smcmManaged
+    else if ModeText = 'bypass' then
+      Result.Mode := smcmBypass
+    else
+      raise ESqlMonitorError.Create(SqlMonitorTranslate('Centralized DB credential resolution returned an invalid mode.'));
+    Result.DbUser := GetJsonString(RootObject, 'db_user');
+    Result.DbPassword := GetJsonString(RootObject, 'db_password');
+    Result.Reason := GetJsonString(RootObject, 'reason');
+  finally
+    RootValue.Free;
+  end;
+end;
+
+
+function TSqlMonitorClient.ResolveDbCredentials(Connection: TDBConnection): TSqlMonitorCredentialResponse;
+var
+  ResponseText: String;
+begin
+  SendJsonRequest(BaseUrl + '/v1/db-credentials/resolve', 'POST', BuildCredentialResolvePayload(Connection), ResponseText, SessionTimeoutSeconds);
+  Result := ParseCredentialResponse(ResponseText);
 end;
 
 
@@ -1388,6 +1921,7 @@ var
   Http: THttpDownload;
   StatusText: String;
   EffectiveTimeOut: Cardinal;
+  AuthToken: String;
 begin
   Http := THttpDownload.Create(FOwner);
   try
@@ -1401,6 +1935,9 @@ begin
     Http.RequestHeaders.Values['Content-Type'] := 'application/json; charset=utf-8';
     Http.RequestHeaders.Values['Accept'] := 'application/json';
     Http.RequestHeaders.Values['X-API-Key'] := GetSqlMonitorApiKey;
+    AuthToken := GetCurrentCentralAuthToken;
+    if (not AuthToken.IsEmpty) and (Pos('/v1/auth/login', LowerCase(URL)) = 0) then
+      Http.RequestHeaders.Values['Authorization'] := 'Bearer ' + AuthToken;
     if not SameText(Method, 'GET') then
       Http.RequestBody := Payload;
     Http.SendRequest('');
@@ -1410,7 +1947,7 @@ begin
       StatusText := ParseApiErrorMessage(ResponseText);
       if StatusText.IsEmpty then
         StatusText := f_('HTTP status %d', [Result]);
-      raise ESqlMonitorError.Create(StatusText);
+      raise ESqlMonitorHttpError.Create(Result, StatusText);
     end;
   finally
     Http.Free;
@@ -1553,11 +2090,13 @@ initialization
   SessionRegistrations := TDictionary<NativeUInt, String>.Create;
   SessionRegistrationsLock := TObject.Create;
   SqlMonitorConfigLock := TObject.Create;
+  SqlMonitorAuthLock := TObject.Create;
 
 finalization
   SessionRegistrations.Free;
   SessionRegistrationsLock.Free;
   SqlMonitorConfigLock.Free;
+  SqlMonitorAuthLock.Free;
 
 end.
 

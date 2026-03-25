@@ -2256,6 +2256,11 @@ begin
   FHasDonatedDatabaseCheck := nbUnset;
   ToolBarDonate.Visible := HasDonated(True) <> nbTrue;
 
+  if not SqlMonitorEnsureStartupAuthentication then begin
+    Free;
+    Exit;
+  end;
+
   // Call user statistics if checked in settings
   if AppSettings.ReadBool(asDoUsageStatistics) then begin
     LastStatsCall := StrToDateTimeDef(AppSettings.ReadString(asLastUsageStatisticCall), DateTimeNever);

@@ -230,7 +230,7 @@ type
     asWarnUnsafeUpdates, asQueryGridLongSortRowNum,
     asCompletionProposal, asCompletionProposalInterval, asCompletionProposalSearchOnMid, asCompletionProposalWidth, asCompletionProposalNbLinesInWindow, asAutoUppercase,
     asTabsToSpaces, asFilterPanel, asAllowMultipleInstances, asFindDialogSearchHistory, asGUIFontName, asGUIFontSize,
-    asTheme, asIconPack, asWebSearchBaseUrl, asSqlMonitorUrl, asSqlMonitorApiKey,
+    asTheme, asIconPack, asWebSearchBaseUrl, asSqlMonitorUrl, asSqlMonitorApiKey, asSqlMonitorCentralAuthEnabled,
     asFindDialogReplaceHistory, asMaxQueryResults, asLogErrors,
     asLogUserSQL, asLogSQL, asLogInfos, asLogDebug, asLogScript, asLogTimestamp, asFieldColorNumeric,
     asFieldColorReal, asFieldColorText, asFieldColorBinary, asFieldColorDatetime, asFieldColorSpatial,
@@ -4222,6 +4222,7 @@ begin
   InitSetting(asWebSearchBaseUrl,                 'WebSearchBaseUrl',                      0, False, 'https://www.ecosia.org/search?q=%query');
   InitSetting(asSqlMonitorUrl,                    'SqlMonitorUrl',                         0, False, '');
   InitSetting(asSqlMonitorApiKey,                 'SqlMonitorApiKey',                      0, False, '');
+  InitSetting(asSqlMonitorCentralAuthEnabled,     'SqlMonitorCentralAuthEnabled',          0, False);
   InitSetting(asMaxQueryResults,                  'MaxQueryResults',                       10);
   InitSetting(asLogErrors,                        'LogErrors',                             0, True);
   InitSetting(asLogUserSQL,                       'LogUserSQL',                            0, True);

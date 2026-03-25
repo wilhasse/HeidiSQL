@@ -170,6 +170,7 @@ type
     editSqlMonitorUrl: TEdit;
     lblSqlMonitorApiKey: TLabel;
     editSqlMonitorApiKey: TEdit;
+    chkSqlMonitorCentralAuth: TCheckBox;
     chkThemePreview: TCheckBox;
     chkCompletionProposalSearchOnMid: TCheckBox;
     lblLongSortRowNum: TLabel;
@@ -376,6 +377,7 @@ begin
   AppSettings.WriteString(asWebSearchBaseUrl, comboWebSearchBaseUrl.Text);
   AppSettings.WriteString(asSqlMonitorUrl, editSqlMonitorUrl.Text);
   AppSettings.WriteString(asSqlMonitorApiKey, editSqlMonitorApiKey.Text);
+  AppSettings.WriteBool(asSqlMonitorCentralAuthEnabled, chkSqlMonitorCentralAuth.Checked);
   SqlMonitorRefreshConfiguration;
 
   AppSettings.WriteInt(asMaxQueryResults, updownMaxQueryResults.Position);
@@ -734,11 +736,13 @@ begin
   comboGUIFont.OnChange(comboGUIFont);
   comboTheme.ItemIndex := comboTheme.Items.IndexOf(AppSettings.ReadString(asTheme));
   comboIconPack.ItemIndex := comboIconPack.Items.IndexOf(AppSettings.ReadString(asIconPack));
+  chkSqlMonitorCentralAuth.Caption := SqlMonitorTranslate('Use centralized AD authentication');
   comboWebSearchBaseUrl.Text := AppSettings.ReadString(asWebSearchBaseUrl);
   AppSettings.StorePath;
   try
     editSqlMonitorUrl.Text := AppSettings.ReadString(asSqlMonitorUrl);
     editSqlMonitorApiKey.Text := AppSettings.ReadString(asSqlMonitorApiKey);
+    chkSqlMonitorCentralAuth.Checked := AppSettings.ReadBool(asSqlMonitorCentralAuthEnabled);
   finally
     AppSettings.RestorePath;
   end;

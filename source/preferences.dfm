@@ -333,6 +333,16 @@
         Height = 14
         Caption = 'SQL monitor API url:'
       end
+      object chkSqlMonitorCentralAuth: TCheckBox
+        Left = 470
+        Top = 365
+        Width = 201
+        Height = 17
+        Anchors = [akTop, akRight]
+        Caption = 'Use centralized AD authentication'
+        TabOrder = 21
+        OnClick = Modified
+      end
       object lblSqlMonitorApiKey: TLabel
         Left = 8
         Top = 387
@@ -343,7 +353,7 @@
       object editSqlMonitorUrl: TEdit
         Left = 220
         Top = 363
-        Width = 451
+        Width = 240
         Height = 22
         Anchors = [akLeft, akTop, akRight]
         TabOrder = 20
@@ -357,7 +367,7 @@
         Height = 22
         Anchors = [akLeft, akTop, akRight]
         PasswordChar = '*'
-        TabOrder = 21
+        TabOrder = 22
         TextHint = 'Central SQL monitor API key'
         OnChange = Modified
       end

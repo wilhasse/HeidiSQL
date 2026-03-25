@@ -481,7 +481,13 @@ type
       FMaxRowsPerInsert: Int64;
       FCaseSensitivity: Integer;
       FSQLFunctions: TSQLFunctionList;
+      FCredentialOverrideActive: Boolean;
+      FCredentialOverrideUsername: String;
+      FCredentialOverridePassword: String;
       procedure SetActive(Value: Boolean); virtual; abstract;
+      procedure ClearCredentialOverride;
+      function GetEffectivePassword: String;
+      function GetEffectiveUsername: String;
       procedure DoBeforeConnect; virtual;
       procedure StartSSHTunnel(var FinalHost: String; var FinalPort: Integer);
       procedure EndSSHTunnel;
@@ -517,6 +523,8 @@ type
     public
       constructor Create(AOwner: TComponent); override;
       destructor Destroy; override;
+      function HasCredentialOverride: Boolean;
+      procedure SetCredentialOverride(const UserName, Password: String);
       procedure Query(SQL: String; DoStoreResult: Boolean=False; LogCategory: TDBLogCategory=lcSQL); virtual;
       procedure Log(Category: TDBLogCategory; Msg: String);
       function EscapeString(Text: String; ProcessJokerChars: Boolean=False; DoQuote: Boolean=True): String; overload;
@@ -613,6 +621,8 @@ type
       function IsNumeric(Text: String): Boolean;
       function IsHex(Text: String): Boolean;
       function Has(Item: TFeatureOrRequirement): Boolean;
+      property EffectivePassword: String read GetEffectivePassword;
+      property EffectiveUsername: String read GetEffectiveUsername;
       property SqlProvider: TSqlProvider read FSqlProvider;
     published
       property Active: Boolean read FActive write SetActive default False;
@@ -2223,6 +2233,47 @@ begin
   inherited;
 end;
 
+
+procedure TDBConnection.ClearCredentialOverride;
+begin
+  FCredentialOverrideActive := False;
+  FCredentialOverrideUsername := '';
+  FCredentialOverridePassword := '';
+end;
+
+
+function TDBConnection.GetEffectivePassword: String;
+begin
+  if FCredentialOverrideActive then
+    Result := FCredentialOverridePassword
+  else
+    Result := FParameters.Password;
+end;
+
+
+function TDBConnection.GetEffectiveUsername: String;
+begin
+  if FCredentialOverrideActive then
+    Result := FCredentialOverrideUsername
+  else
+    Result := FParameters.Username;
+end;
+
+
+function TDBConnection.HasCredentialOverride: Boolean;
+begin
+  Result := FCredentialOverrideActive;
+end;
+
+
+procedure TDBConnection.SetCredentialOverride(const UserName, Password: String);
+begin
+  FCredentialOverrideActive := True;
+  FCredentialOverrideUsername := UserName;
+  FCredentialOverridePassword := Password;
+end;
+
+
 destructor TMySQLConnection.Destroy;
 begin
   if Active then Active := False;
@@ -2509,8 +2560,8 @@ begin
       FinalPassword := '';
     end else begin
       // Normal mode, send user specified user/password
-      FinalUsername := FParameters.Username;
-      FinalPassword := FParameters.Password;
+      FinalUsername := EffectiveUsername;
+      FinalPassword := EffectivePassword;
     end;
 
     // Gather client options
@@ -2732,15 +2783,15 @@ begin
 
     // Quote password, just in case there is a semicolon or a double quote in it.
     // See http://forums.asp.net/t/1957484.aspx?Passwords+ending+with+semi+colon+as+the+terminal+element+in+connection+strings+
-    if Pos('"', Parameters.Password) > 0 then
-      QuotedPassword := ''''+Parameters.Password+''''
+    if Pos('"', EffectivePassword) > 0 then
+      QuotedPassword := ''''+EffectivePassword+''''
     else
-      QuotedPassword := '"'+Parameters.Password+'"';
+      QuotedPassword := '"'+EffectivePassword+'"';
 
     FAdoHandle.ConnectionString := 'Provider='+Parameters.LibraryOrProvider+';'+
       'Password='+QuotedPassword+';'+
       'Persist Security Info=True;'+
-      'User ID='+Parameters.Username+';'+
+      'User ID='+EffectiveUsername+';'+
       'Network Library='+NetLib+';'+
       'Data Source='+DataSource+';'+
       'Application Name='+AppName+';'
@@ -2876,8 +2927,8 @@ begin
     ConnectOptions
       .AddPair('host', FinalHost)
       .AddPair('port', IntToStr(FinalPort))
-      .AddPair('user', FParameters.Username)
-      .AddPair('password', FParameters.Password)
+      .AddPair('user', EffectiveUsername)
+      .AddPair('password', EffectivePassword)
       .AddPair('dbname', dbname)
       .AddPair('application_name', APPNAME)
       .AddPair('sslmode', 'disable');
@@ -3152,8 +3203,8 @@ begin
     end;
 
     FFDHandle.Params.Values['Database'] := Parameters.AllDatabasesStr;
-    FFDHandle.Params.Values['User_Name'] := Parameters.Username;
-    FFDHandle.Params.Values['Password'] := Parameters.Password;
+    FFDHandle.Params.Values['User_Name'] := EffectiveUsername;
+    FFDHandle.Params.Values['Password'] := EffectivePassword;
     FFDHandle.Params.Values['CharacterSet'] := 'UTF8';
     FFDHandle.Params.Values['ExtendedMetadata'] := 'True';
 
@@ -3234,30 +3285,44 @@ var
   UsingPass: String;
   Dialog: TfrmLogin;
 begin
+  ClearCredentialOverride;
+
+  if SqlMonitorCentralAuthEnabled and TSqlMonitorClient.SupportsCentralAuthConnection(Self) then begin
+    try
+      SqlMonitorPrepareConnectionAuthentication(Self);
+    except
+      on E:Exception do
+        raise EDbError.Create(E.Message);
+    end;
+  end;
+
   // Don't remember prompt values
-  if FParameters.LoginPrompt then begin
+  if FParameters.LoginPrompt and (not HasCredentialOverride) then begin
     Dialog := TfrmLogin.Create(Self);
-    Dialog.Caption := APPNAME + ' - ' + FParameters.SessionName;
-    Dialog.lblPrompt.Caption := f_('Login to %s:', [FParameters.Hostname]);
-    Dialog.editUsername.Text := FParameters.Username;
-    Dialog.editPassword.Text := FParameters.Password;
-    Dialog.ShowModal;
-    FParameters.Username := Dialog.editUsername.Text;
-    FParameters.Password := Dialog.editPassword.Text;
-    Dialog.Free;
+    try
+      Dialog.Caption := APPNAME + ' - ' + FParameters.SessionName;
+      Dialog.lblPrompt.Caption := f_('Login to %s:', [FParameters.Hostname]);
+      Dialog.editUsername.Text := FParameters.Username;
+      Dialog.editPassword.Text := FParameters.Password;
+      if Dialog.ShowModal <> mrOk then
+        raise EDbError.Create(_('Connection login was cancelled.'));
+      SetCredentialOverride(Dialog.editUsername.Text, Dialog.editPassword.Text);
+    finally
+      Dialog.Free;
+    end;
   end;
 
   // Prepare connection
-  UsingPass := IfThen(FParameters.Password.IsEmpty, 'No', 'Yes');
+  UsingPass := IfThen(EffectivePassword.IsEmpty, 'No', 'Yes');
   case FParameters.NetTypeGroup of
     ngSQLite: begin
       Log(lcInfo, f_('Connecting to %s via %s, cipher %s, using encryption key: %s ...',
-        [FParameters.Hostname, FParameters.NetTypeName(True), FParameters.Username, UsingPass]
+        [FParameters.Hostname, FParameters.NetTypeName(True), EffectiveUsername, UsingPass]
         ));
     end;
     else begin
       Log(lcInfo, f_('Connecting to %s via %s, username %s, using password: %s ...',
-        [FParameters.Hostname, FParameters.NetTypeName(True), FParameters.Username, UsingPass]
+        [FParameters.Hostname, FParameters.NetTypeName(True), EffectiveUsername, UsingPass]
         ));
     end;
   end;
