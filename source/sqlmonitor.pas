@@ -147,6 +147,26 @@ type
     procedure HandleCancel(Sender: TObject);
   end;
 
+  TSqlMonitorCentralAuthDialogState = class(TObject)
+  private
+    FDialog: TForm;
+    FPromptLabel: TLabel;
+    FErrorLabel: TLabel;
+    FUserLabel: TLabel;
+    FUserEdit: TEdit;
+    FPasswordLabel: TLabel;
+    FPasswordEdit: TEdit;
+    FSignInButton: TButton;
+    FCancelButton: TButton;
+    procedure SetError(const Msg: String);
+    procedure UpdateLayout;
+  public
+    constructor Create(ADialog: TForm; APromptLabel, AErrorLabel, AUserLabel: TLabel;
+      AUserEdit: TEdit; APasswordLabel: TLabel; APasswordEdit: TEdit;
+      ASignInButton, ACancelButton: TButton; const InitialError: String);
+    procedure HandleCloseQuery(Sender: TObject; var CanClose: Boolean);
+  end;
+
 var
   SessionRegistrations: TDictionary<NativeUInt, String>;
   SessionRegistrationsLock: TObject;
@@ -773,9 +793,7 @@ var
   PromptLabel, ErrorLabel, UserLabel, PasswordLabel: TLabel;
   UserEdit, PasswordEdit: TEdit;
   SignInButton, CancelButton: TButton;
-  Client: TSqlMonitorClient;
-  ActorId, AuthToken: String;
-  ExpiresAt: TDateTime;
+  DialogState: TSqlMonitorCentralAuthDialogState;
 begin
   Result := False;
   Dialog := TForm.CreateNew(MainForm);
@@ -786,58 +804,39 @@ begin
     Dialog.Width := 470;
     Dialog.Height := 250;
     Dialog.Constraints.MinWidth := 430;
-    Dialog.Constraints.MinHeight := 230;
+    Dialog.Constraints.MinHeight := 220;
     Dialog.BorderIcons := [biSystemMenu];
 
     PromptLabel := TLabel.Create(Dialog);
     PromptLabel.Parent := Dialog;
-    PromptLabel.Left := 16;
-    PromptLabel.Top := 16;
-    PromptLabel.Width := Dialog.ClientWidth - 32;
     PromptLabel.AutoSize := False;
     PromptLabel.WordWrap := True;
     PromptLabel.Caption := SqlMonitorTranslate('Sign in with your Active Directory credentials to continue.');
-    PromptLabel.Height := 36;
     PromptLabel.Anchors := [akLeft, akTop, akRight];
 
     ErrorLabel := TLabel.Create(Dialog);
     ErrorLabel.Parent := Dialog;
-    ErrorLabel.Left := 16;
-    ErrorLabel.Top := PromptLabel.Top + PromptLabel.Height + 8;
-    ErrorLabel.Width := Dialog.ClientWidth - 32;
     ErrorLabel.AutoSize := False;
     ErrorLabel.WordWrap := True;
     ErrorLabel.Font.Color := clRed;
-    ErrorLabel.Caption := InitialError;
-    ErrorLabel.Height := 34;
     ErrorLabel.Anchors := [akLeft, akTop, akRight];
 
     UserLabel := TLabel.Create(Dialog);
     UserLabel.Parent := Dialog;
-    UserLabel.Left := 16;
-    UserLabel.Top := ErrorLabel.Top + ErrorLabel.Height + 4;
     UserLabel.Caption := SqlMonitorTranslate('User name');
 
     UserEdit := TEdit.Create(Dialog);
     UserEdit.Parent := Dialog;
-    UserEdit.Left := 16;
-    UserEdit.Top := UserLabel.Top + UserLabel.Height + 4;
-    UserEdit.Width := Dialog.ClientWidth - 32;
     UserEdit.Anchors := [akLeft, akTop, akRight];
     UserEdit.Text := GetCurrentCentralAuthUsername;
     UserLabel.FocusControl := UserEdit;
 
     PasswordLabel := TLabel.Create(Dialog);
     PasswordLabel.Parent := Dialog;
-    PasswordLabel.Left := 16;
-    PasswordLabel.Top := UserEdit.Top + UserEdit.Height + 8;
     PasswordLabel.Caption := SqlMonitorTranslate('Password');
 
     PasswordEdit := TEdit.Create(Dialog);
     PasswordEdit.Parent := Dialog;
-    PasswordEdit.Left := 16;
-    PasswordEdit.Top := PasswordLabel.Top + PasswordLabel.Height + 4;
-    PasswordEdit.Width := Dialog.ClientWidth - 32;
     PasswordEdit.Anchors := [akLeft, akTop, akRight];
     PasswordEdit.PasswordChar := '*';
     PasswordLabel.FocusControl := PasswordEdit;
@@ -846,8 +845,6 @@ begin
     SignInButton.Parent := Dialog;
     SignInButton.Width := 100;
     SignInButton.Height := 30;
-    SignInButton.Left := Dialog.ClientWidth - 214;
-    SignInButton.Top := Dialog.ClientHeight - 44;
     SignInButton.Anchors := [akRight, akBottom];
     SignInButton.Caption := SqlMonitorTranslate('Sign in');
     SignInButton.Default := True;
@@ -857,39 +854,24 @@ begin
     CancelButton.Parent := Dialog;
     CancelButton.Width := 90;
     CancelButton.Height := 30;
-    CancelButton.Left := Dialog.ClientWidth - 104;
-    CancelButton.Top := Dialog.ClientHeight - 44;
     CancelButton.Anchors := [akRight, akBottom];
     CancelButton.Caption := _('Cancel');
     CancelButton.Cancel := True;
     CancelButton.ModalResult := mrCancel;
 
-    if Trim(UserEdit.Text) = '' then
-      Dialog.ActiveControl := UserEdit
-    else
-      Dialog.ActiveControl := PasswordEdit;
+    DialogState := TSqlMonitorCentralAuthDialogState.Create(Dialog, PromptLabel, ErrorLabel,
+      UserLabel, UserEdit, PasswordLabel, PasswordEdit, SignInButton, CancelButton, InitialError);
+    try
+      Dialog.OnCloseQuery := DialogState.HandleCloseQuery;
 
-    while True do begin
-      if Dialog.ShowModal <> mrOk then
-        Exit(False);
+      if Trim(UserEdit.Text) = '' then
+        Dialog.ActiveControl := UserEdit
+      else
+        Dialog.ActiveControl := PasswordEdit;
 
-      Client := TSqlMonitorClient.Create(Dialog);
-      try
-        try
-          if Client.LoginCentralAuth(Trim(UserEdit.Text), PasswordEdit.Text, ActorId, AuthToken, ExpiresAt) then begin
-            StoreCentralAuthSession(Trim(UserEdit.Text), ActorId, AuthToken, ExpiresAt);
-            Exit(True);
-          end;
-        except
-          on E:Exception do begin
-            ErrorLabel.Caption := E.Message;
-            PasswordEdit.Text := '';
-            Dialog.ActiveControl := PasswordEdit;
-          end;
-        end;
-      finally
-        Client.Free;
-      end;
+      Result := Dialog.ShowModal = mrOk;
+    finally
+      DialogState.Free;
     end;
   finally
     Dialog.Free;
@@ -2080,6 +2062,132 @@ end;
 
 
 { TSqlMonitorWaitState }
+
+
+constructor TSqlMonitorCentralAuthDialogState.Create(ADialog: TForm; APromptLabel, AErrorLabel,
+  AUserLabel: TLabel; AUserEdit: TEdit; APasswordLabel: TLabel; APasswordEdit: TEdit;
+  ASignInButton, ACancelButton: TButton; const InitialError: String);
+begin
+  inherited Create;
+  FDialog := ADialog;
+  FPromptLabel := APromptLabel;
+  FErrorLabel := AErrorLabel;
+  FUserLabel := AUserLabel;
+  FUserEdit := AUserEdit;
+  FPasswordLabel := APasswordLabel;
+  FPasswordEdit := APasswordEdit;
+  FSignInButton := ASignInButton;
+  FCancelButton := ACancelButton;
+  SetError(InitialError);
+end;
+
+
+procedure TSqlMonitorCentralAuthDialogState.SetError(const Msg: String);
+begin
+  FErrorLabel.Caption := Trim(Msg);
+  UpdateLayout;
+end;
+
+
+procedure TSqlMonitorCentralAuthDialogState.UpdateLayout;
+const
+  Margin = 16;
+  LabelSpacing = 4;
+  SectionSpacing = 10;
+  ButtonSpacing = 12;
+var
+  Y: Integer;
+  ButtonsTop: Integer;
+  RequiredHeight: Integer;
+  MeasureRect: TRect;
+
+  function CalcLabelHeight(ALabel: TLabel; const Text: String): Integer;
+  begin
+    if Trim(Text) = '' then
+      Exit(0);
+    FDialog.HandleNeeded;
+    FDialog.Canvas.Font.Assign(ALabel.Font);
+    MeasureRect := Rect(0, 0, FDialog.ClientWidth - (Margin * 2), 0);
+    DrawText(FDialog.Canvas.Handle, PChar(Text), Length(Text), MeasureRect,
+      DT_LEFT or DT_WORDBREAK or DT_CALCRECT);
+    Result := Max(MeasureRect.Height, FDialog.Canvas.TextHeight('Wy'));
+  end;
+
+begin
+  FPromptLabel.SetBounds(Margin, Margin, FDialog.ClientWidth - (Margin * 2),
+    Max(20, CalcLabelHeight(FPromptLabel, FPromptLabel.Caption)));
+
+  Y := FPromptLabel.Top + FPromptLabel.Height + SectionSpacing;
+
+  if FErrorLabel.Caption <> '' then begin
+    FErrorLabel.Visible := True;
+    FErrorLabel.SetBounds(Margin, Y, FDialog.ClientWidth - (Margin * 2),
+      Max(18, CalcLabelHeight(FErrorLabel, FErrorLabel.Caption)));
+    Y := FErrorLabel.Top + FErrorLabel.Height + 8;
+  end else begin
+    FErrorLabel.Visible := False;
+    FErrorLabel.SetBounds(Margin, Y, FDialog.ClientWidth - (Margin * 2), 0);
+  end;
+
+  FUserLabel.Left := Margin;
+  FUserLabel.Top := Y;
+
+  FUserEdit.SetBounds(Margin, FUserLabel.Top + FUserLabel.Height + LabelSpacing,
+    FDialog.ClientWidth - (Margin * 2), FUserEdit.Height);
+
+  FPasswordLabel.Left := Margin;
+  FPasswordLabel.Top := FUserEdit.Top + FUserEdit.Height + SectionSpacing;
+
+  FPasswordEdit.SetBounds(Margin, FPasswordLabel.Top + FPasswordLabel.Height + LabelSpacing,
+    FDialog.ClientWidth - (Margin * 2), FPasswordEdit.Height);
+
+  RequiredHeight := FPasswordEdit.Top + FPasswordEdit.Height + FSignInButton.Height + 28;
+  if FDialog.ClientHeight < RequiredHeight then
+    FDialog.ClientHeight := RequiredHeight;
+
+  ButtonsTop := FDialog.ClientHeight - FSignInButton.Height - 14;
+  FCancelButton.SetBounds(FDialog.ClientWidth - FCancelButton.Width - Margin, ButtonsTop,
+    FCancelButton.Width, FCancelButton.Height);
+  FSignInButton.SetBounds(FCancelButton.Left - ButtonSpacing - FSignInButton.Width, ButtonsTop,
+    FSignInButton.Width, FSignInButton.Height);
+end;
+
+
+procedure TSqlMonitorCentralAuthDialogState.HandleCloseQuery(Sender: TObject; var CanClose: Boolean);
+var
+  Client: TSqlMonitorClient;
+  ActorId, AuthToken: String;
+  ExpiresAt: TDateTime;
+begin
+  if FDialog.ModalResult <> mrOk then begin
+    CanClose := True;
+    Exit;
+  end;
+
+  CanClose := False;
+  Client := TSqlMonitorClient.Create(FDialog);
+  try
+    try
+      if Client.LoginCentralAuth(Trim(FUserEdit.Text), FPasswordEdit.Text, ActorId, AuthToken, ExpiresAt) then begin
+        StoreCentralAuthSession(Trim(FUserEdit.Text), ActorId, AuthToken, ExpiresAt);
+        SetError('');
+        CanClose := True;
+      end;
+    except
+      on E:Exception do begin
+        SetError(E.Message);
+        FPasswordEdit.Text := '';
+        if Trim(FUserEdit.Text) = '' then
+          FDialog.ActiveControl := FUserEdit
+        else
+          FDialog.ActiveControl := FPasswordEdit;
+      end;
+    end;
+  finally
+    Client.Free;
+  end;
+end;
+
 
 procedure TSqlMonitorWaitState.HandleCancel(Sender: TObject);
 begin
