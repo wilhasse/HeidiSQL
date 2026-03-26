@@ -54,10 +54,12 @@ type
     ApiConnectionId: String;
     ApiCustomer: String;
     MatchHost: String;
-    MatchDatabase: String;
+    MatchDatabases: TStringList;
     Managed: Boolean;
     Archived: Boolean;
     Handled: Boolean;
+    constructor Create;
+    destructor Destroy; override;
   end;
 
   TStringDictionary = TDictionary<String, String>;
@@ -76,6 +78,22 @@ end;
 destructor TSqlCatalogResponse.Destroy;
 begin
   FConnections.Free;
+  inherited;
+end;
+
+
+constructor TSqlExistingSession.Create;
+begin
+  inherited Create;
+  MatchDatabases := TStringList.Create;
+  MatchDatabases.CaseSensitive := False;
+  MatchDatabases.Duplicates := dupIgnore;
+end;
+
+
+destructor TSqlExistingSession.Destroy;
+begin
+  MatchDatabases.Free;
   inherited;
 end;
 
@@ -133,6 +151,27 @@ begin
       Result := Trim(Databases[0]);
   finally
     Databases.Free;
+  end;
+end;
+
+
+procedure FillStoredSessionDatabases(Params: TConnectionParameters; Databases: TStrings);
+var
+  StoredDatabases: TStringList;
+  i: Integer;
+  DatabaseName: String;
+begin
+  if (not Assigned(Params)) or (Databases = nil) then
+    Exit;
+  StoredDatabases := Params.AllDatabasesList;
+  try
+    for i := 0 to StoredDatabases.Count - 1 do begin
+      DatabaseName := NormalizeMatchPart(StoredDatabases[i]);
+      if (not DatabaseName.IsEmpty) and (Databases.IndexOf(DatabaseName) = -1) then
+        Databases.Add(DatabaseName);
+    end;
+  finally
+    StoredDatabases.Free;
   end;
 end;
 
@@ -239,7 +278,7 @@ end;
 
 function EnsureUniqueSessionPath(const DesiredPath, CurrentPath: String): String;
 var
-  BasePath, ParentPath, NamePart: String;
+  ParentPath, NamePart: String;
   Suffix: Integer;
 begin
   Result := DesiredPath;
@@ -254,19 +293,14 @@ begin
   if SameText(ParentPath, '.') then
     ParentPath := '';
   NamePart := LastPathSegment(Result);
-  BasePath := NamePart + ' [API]';
-  if ParentPath <> '' then
-    Result := ParentPath + '\' + BasePath
-  else
-    Result := BasePath;
   Suffix := 2;
-  while AppSettings.SessionPathExists(Result) and (not SameText(Result, CurrentPath)) do begin
+  repeat
     if ParentPath <> '' then
-      Result := ParentPath + '\' + BasePath + ' ' + IntToStr(Suffix)
+      Result := ParentPath + '\' + NamePart + ' ' + IntToStr(Suffix)
     else
-      Result := BasePath + ' ' + IntToStr(Suffix);
+      Result := NamePart + ' ' + IntToStr(Suffix);
     Inc(Suffix);
-  end;
+  until (not AppSettings.SessionPathExists(Result)) or SameText(Result, CurrentPath);
 end;
 
 
@@ -644,7 +678,7 @@ begin
         Item.ApiConnectionId := ReadSessionStringSetting(SessionPath, asApiConnectionId);
         Item.ApiCustomer := ReadSessionStringSetting(SessionPath, asApiCustomer);
         Item.MatchHost := NormalizeMatchPart(Params.Hostname);
-        Item.MatchDatabase := NormalizeMatchPart(StoredSessionDatabase(Params));
+        FillStoredSessionDatabases(Params, Item.MatchDatabases);
         Item.Managed := ReadSessionBoolSetting(SessionPath, asApiManaged);
         Item.Archived := ReadSessionBoolSetting(SessionPath, asApiArchived);
         Item.Handled := False;
@@ -703,12 +737,23 @@ end;
 procedure CollectByMatchKey(ExistingSessions: TObjectList<TSqlExistingSession>; const MatchKey: String;
   Candidates: TObjectList<TSqlExistingSession>);
 var
+  DelimPos: Integer;
   Item: TSqlExistingSession;
+  HostName, DatabaseName: String;
 begin
+  DelimPos := Pos(#1, MatchKey);
+  if DelimPos > 0 then begin
+    HostName := Copy(MatchKey, 1, DelimPos - 1);
+    DatabaseName := Copy(MatchKey, DelimPos + 1, MaxInt);
+  end else begin
+    HostName := MatchKey;
+    DatabaseName := '';
+  end;
+
   for Item in ExistingSessions do begin
     if Item.Handled then
       Continue;
-    if MakeMatchKey(Item.MatchHost, Item.MatchDatabase) = MatchKey then
+    if SameText(Item.MatchHost, HostName) and (Item.MatchDatabases.IndexOf(DatabaseName) > -1) then
       Candidates.Add(Item);
   end;
 end;
@@ -816,7 +861,6 @@ begin
         DesiredPath := DisplayName
       else
         DesiredPath := FolderName + '\' + DisplayName;
-      DesiredPath := SanitizeSessionPathPart(DesiredPath);
       MatchKey := MakeMatchKey(Item.Host, Item.DatabaseName);
 
       Winner := FindManagedSessionByConnectionId(ExistingSessions, Item.ConnectionId);
@@ -860,7 +904,8 @@ begin
           Winner.ApiConnectionId := Item.ConnectionId;
           Winner.ApiCustomer := FolderName;
           Winner.MatchHost := NormalizeMatchPart(Item.Host);
-          Winner.MatchDatabase := NormalizeMatchPart(Item.DatabaseName);
+          Winner.MatchDatabases.Clear;
+          Winner.MatchDatabases.Add(NormalizeMatchPart(Item.DatabaseName));
           Winner.Managed := True;
           Winner.Archived := False;
           Winner.Handled := True;
