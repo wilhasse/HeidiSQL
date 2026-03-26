@@ -208,6 +208,7 @@ type
     procedure ListSessionsCompareNodes(Sender: TBaseVirtualTree; Node1,
       Node2: PVirtualNode; Column: TColumnIndex; var Result: Integer);
     procedure menuFoldersAtTopClick(Sender: TObject);
+    procedure menuRefreshCatalogClick(Sender: TObject);
   private
     { Private declarations }
     FLoaded: Boolean;
@@ -216,6 +217,7 @@ type
     FSettingsImportWaitTime: Cardinal;
     FPopupDatabases: TPopupMenu;
     FPopupCiphers: TPopupMenu;
+    FMenuRefreshCatalog: TMenuItem;
     FButtonAnimationStep: Integer;
     FLastSelectedNetTypeGroup: TNetTypeGroup;
     function GetSelectedNetType: TNetType;
@@ -240,7 +242,7 @@ type
 
 implementation
 
-uses Main, apphelpers, grideditlinks, dbstructures.sqlite;
+uses Main, apphelpers, grideditlinks, dbstructures.sqlite, sqlcatalog, sqlmonitor;
 
 {$I const.inc}
 
@@ -331,6 +333,11 @@ begin
   end;
   SetLength(ExeFiles, 0);
   comboSSHExe.Items.Add('ssh.exe');
+
+  FMenuRefreshCatalog := TMenuItem.Create(Self);
+  FMenuRefreshCatalog.Caption := SqlMonitorTranslate('Refresh sessions from API');
+  FMenuRefreshCatalog.OnClick := menuRefreshCatalogClick;
+  popupMore.Items.Insert(1, FMenuRefreshCatalog);
 end;
 
 
@@ -550,9 +557,55 @@ var
   btn: TButton;
 begin
   btn := Sender as TButton;
+  if Assigned(FMenuRefreshCatalog) then begin
+    FMenuRefreshCatalog.Visible := SqlMonitorCentralAuthEnabled and TSqlMonitorClient.IsConfigured;
+    FMenuRefreshCatalog.Enabled := FMenuRefreshCatalog.Visible;
+  end;
   btn.DropDownMenu.Popup(btn.ClientOrigin.X, btn.ClientOrigin.Y+btn.Height);
 end;
 
+
+procedure Tconnform.menuRefreshCatalogClick(Sender: TObject);
+var
+  CanProceed, SyncOk: Boolean;
+  SummaryMessage, SelectedPath: String;
+  Node: PVirtualNode;
+  Sess: PConnectionParameters;
+begin
+  CanProceed := True;
+  FinalizeModifications(CanProceed);
+  if not CanProceed then
+    Exit;
+
+  SelectedPath := SelectedSessionPath;
+  Screen.Cursor := crHourglass;
+  try
+    SyncOk := SqlMonitorSyncConnectionCatalog(True, SummaryMessage);
+  finally
+    Screen.Cursor := crDefault;
+  end;
+
+  if SyncOk then begin
+    RefreshSessions(nil);
+    SelectNode(ListSessions, nil);
+    Node := ListSessions.GetFirst;
+    while Assigned(Node) do begin
+      Sess := ListSessions.GetNodeData(Node);
+      if Assigned(Sess) and SameText(Sess.SessionPath, SelectedPath) then begin
+        SelectNode(ListSessions, Node);
+        Break;
+      end;
+      Node := ListSessions.GetNext(Node);
+    end;
+    if not SummaryMessage.IsEmpty then begin
+      MainForm.LogSQL(SummaryMessage);
+      MessageDialog(SummaryMessage, mtInformation, [mbOK]);
+    end;
+  end else if not SummaryMessage.IsEmpty then begin
+    MainForm.LogSQL(SummaryMessage, lcError);
+    MessageDialog(SummaryMessage, mtWarning, [mbOK]);
+  end;
+end;
 
 procedure Tconnform.btnSaveAsClick(Sender: TObject);
 var

@@ -121,8 +121,14 @@ type
 function SqlMonitorCentralAuthEnabled: Boolean;
 function SqlMonitorShouldHandle(Connection: TDBConnection): Boolean;
 function SqlMonitorEnsureStartupAuthentication: Boolean;
+function SqlMonitorEnsureCentralAuthSession(const InitialError: String=''): Boolean;
+function SqlMonitorHasValidCentralAuthToken: Boolean;
+function SqlMonitorGetCurrentAuthToken: String;
+function SqlMonitorGetApiKey: String;
+procedure SqlMonitorClearCentralAuthSession;
 function SqlMonitorGetDecisionMessage(Response: TSqlMonitorBatchResponse): String;
 function SqlMonitorTranslate(const MsgId: String): String;
+
 procedure SqlMonitorPrepareConnectionAuthentication(Connection: TDBConnection);
 procedure SqlMonitorRefreshConfiguration;
 function SqlMonitorPrepareExecution(Connection: TDBConnection; StatementSql: TStrings; out Context: TSqlMonitorExecutionContext): Boolean;
@@ -278,7 +284,27 @@ begin
   else if SameText(MsgId, 'Centralized AD login did not return an auth token.') then
     Result := 'A autenticacao AD centralizada nao retornou um token de autenticacao.'
   else if SameText(MsgId, 'Centralized DB credential resolution returned an invalid mode.') then
-    Result := 'A resolucao centralizada de credencial do banco retornou um modo invalido.';
+    Result := 'A resolucao centralizada de credencial do banco retornou um modo invalido.'
+  else if SameText(MsgId, 'Refresh sessions from API') then
+    Result := 'Atualizar sessoes da API'
+  else if SameText(MsgId, 'Session catalog synchronization warning') then
+    Result := 'Aviso na sincronizacao do catalogo de sessoes'
+  else if SameText(MsgId, 'Session catalog synchronized successfully.') then
+    Result := 'Catalogo de sessoes sincronizado com sucesso.'
+  else if SameText(MsgId, 'Session catalog synchronized: %d created, %d updated, %d archived.') then
+    Result := 'Catalogo de sessoes sincronizado: %d criadas, %d atualizadas, %d arquivadas.'
+  else if SameText(MsgId, 'Session catalog synchronization failed: ') then
+    Result := 'Falha na sincronizacao do catalogo de sessoes: '
+  else if SameText(MsgId, 'Connection catalog synchronization requires centralized AD authentication.') then
+    Result := 'A sincronizacao do catalogo de conexoes requer autenticacao AD centralizada.'
+  else if SameText(MsgId, 'Connection catalog synchronization requires the SQL monitor URL and API key.') then
+    Result := 'A sincronizacao do catalogo de conexoes requer a URL e a chave da API do monitor SQL.'
+  else if SameText(MsgId, 'The central service returned an invalid session catalog payload.') then
+    Result := 'O servico central retornou um payload invalido para o catalogo de sessoes.'
+  else if SameText(MsgId, 'The central service returned an incomplete session catalog entry.') then
+    Result := 'O servico central retornou um item incompleto no catalogo de sessoes.'
+  else if SameText(MsgId, 'The central service returned an unsupported network type for catalog entry "%s".') then
+    Result := 'O servico central retornou um tipo de rede nao suportado para o item "%s" do catalogo.';
 end;
 
 
@@ -894,6 +920,37 @@ begin
   Result := PromptForCentralAuthSession('');
 end;
 
+
+function SqlMonitorEnsureCentralAuthSession(const InitialError: String=''): Boolean;
+begin
+  if HasValidCentralAuthToken then
+    Exit(True);
+  Result := PromptForCentralAuthSession(InitialError);
+end;
+
+
+function SqlMonitorHasValidCentralAuthToken: Boolean;
+begin
+  Result := HasValidCentralAuthToken;
+end;
+
+
+function SqlMonitorGetCurrentAuthToken: String;
+begin
+  Result := GetCurrentCentralAuthToken;
+end;
+
+
+function SqlMonitorGetApiKey: String;
+begin
+  Result := GetSqlMonitorApiKey;
+end;
+
+
+procedure SqlMonitorClearCentralAuthSession;
+begin
+  ClearCentralAuthSession;
+end;
 
 procedure SqlMonitorPrepareConnectionAuthentication(Connection: TDBConnection);
 var

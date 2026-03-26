@@ -15,7 +15,7 @@ uses
   SynHighlighterSQL, Vcl.Tabs, SynUnicode, SynRegExpr, Vcl.ExtActns, System.IOUtils, System.Types, Vcl.Themes, System.Win.ComObj,
   Winapi.CommCtrl, System.Contnrs, System.Generics.Collections, System.Generics.Defaults, SynEditExport, SynExportHTML, SynExportRTF, System.Math, Vcl.ExtDlgs, System.Win.Registry, Vcl.AppEvnts,
   routine_editor, trigger_editor, event_editor, preferences, EditVar, apphelpers, createdatabase, table_editor,
-  TableTools, View, Usermanager, SelectDBObject, connections, sqlhelp, dbconnection, sqlmonitor,
+  TableTools, View, Usermanager, SelectDBObject, connections, sqlhelp, dbconnection, sqlmonitor, sqlcatalog,
   insertfiles, searchreplace, loaddata, copytable, csv_detector, Cromis.DirectoryWatch, SyncDB, gnugettext,
   VirtualTrees, VirtualTrees.HeaderPopup, VirtualTrees.Utils, VirtualTrees.Types,
   JumpList, System.Actions, System.UITypes, Vcl.Imaging.pngimage,
@@ -2223,6 +2223,7 @@ var
   frm : TfrmUpdateCheck;
   StatsCall: THttpDownload;
   SessionPaths: TStringlist;
+  CatalogSyncMessage: String;
   DlgResult: TModalResult;
   SessionManager: TConnForm;
 begin
@@ -2248,10 +2249,6 @@ begin
     end;
   end;
 
-  // Get all session names
-  SessionPaths := TStringList.Create;
-  AppSettings.GetSessionPaths('', SessionPaths);
-
   // Probably hide image
   FHasDonatedDatabaseCheck := nbUnset;
   ToolBarDonate.Visible := HasDonated(True) <> nbTrue;
@@ -2260,6 +2257,18 @@ begin
     Free;
     Exit;
   end;
+
+  if SqlMonitorCentralAuthEnabled then begin
+    CatalogSyncMessage := '';
+    if not SqlMonitorSyncConnectionCatalog(False, CatalogSyncMessage) and (not CatalogSyncMessage.IsEmpty) then begin
+      LogSQL(CatalogSyncMessage, lcError);
+      MessageDialog(CatalogSyncMessage, mtWarning, [mbOK]);
+    end;
+  end;
+
+  // Get all session names
+  SessionPaths := TStringList.Create;
+  AppSettings.GetSessionPaths('', SessionPaths);
 
   // Call user statistics if checked in settings
   if AppSettings.ReadBool(asDoUsageStatistics) then begin

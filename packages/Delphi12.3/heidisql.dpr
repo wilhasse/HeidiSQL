@@ -20,6 +20,7 @@ uses
   insertfiles in '..\..\source\insertfiles.pas' {frmInsertFiles},
   apphelpers in '..\..\source\apphelpers.pas',
   sqlmonitor in '..\..\source\sqlmonitor.pas',
+  sqlcatalog in '..\..\source\sqlcatalog.pas',
   sqlhelp in '..\..\source\sqlhelp.pas' {frmSQLhelp},
   dbstructures in '..\..\source\dbstructures.pas',
   dbstructures.mysql in '..\..\source\dbstructures.mysql.pas',

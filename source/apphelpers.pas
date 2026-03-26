@@ -231,6 +231,7 @@ type
     asCompletionProposal, asCompletionProposalInterval, asCompletionProposalSearchOnMid, asCompletionProposalWidth, asCompletionProposalNbLinesInWindow, asAutoUppercase,
     asTabsToSpaces, asFilterPanel, asAllowMultipleInstances, asFindDialogSearchHistory, asGUIFontName, asGUIFontSize,
     asTheme, asIconPack, asWebSearchBaseUrl, asSqlMonitorUrl, asSqlMonitorApiKey, asSqlMonitorCentralAuthEnabled,
+    asApiManaged, asApiConnectionId, asApiMatchHost, asApiMatchDatabase, asApiLastSyncAt, asApiArchived, asApiCustomer,
     asFindDialogReplaceHistory, asMaxQueryResults, asLogErrors,
     asLogUserSQL, asLogSQL, asLogInfos, asLogDebug, asLogScript, asLogTimestamp, asFieldColorNumeric,
     asFieldColorReal, asFieldColorText, asFieldColorBinary, asFieldColorDatetime, asFieldColorSpatial,
@@ -4261,6 +4262,13 @@ begin
   InitSetting(asListColPositions,                 'ColPositions_%s',                       0, False, '');
   InitSetting(asListColSort,                      'ColSort_%s',                            0, False, '');
   InitSetting(asSessionFolder,                    'Folder',                                0, False, '', True);
+  InitSetting(asApiManaged,                       'ApiManaged',                            0, False, '', True);
+  InitSetting(asApiConnectionId,                  'ApiConnectionId',                       0, False, '', True);
+  InitSetting(asApiMatchHost,                     'ApiMatchHost',                          0, False, '', True);
+  InitSetting(asApiMatchDatabase,                 'ApiMatchDatabase',                      0, False, '', True);
+  InitSetting(asApiLastSyncAt,                    'ApiLastSyncAt',                         0, False, '', True);
+  InitSetting(asApiArchived,                      'ApiArchived',                           0, False, '', True);
+  InitSetting(asApiCustomer,                      'ApiCustomer',                           0, False, '', True);
   InitSetting(asRecentFilter,                     '%s',                                    0, False, '', True);
   InitSetting(asTimestampColumns,                 'TimestampColumns',                      0, False, '', True);
   InitSetting(asDateTimeEditorCursorPos,          'DateTimeEditor_CursorPos_Type%s',       0);
