@@ -37,7 +37,7 @@ set "SIGN_FILENAME=heidisql64.exe"
 set "SIGN_OUTPUT_FILE=%CD%\out\%SIGN_FILENAME%"
 if not defined SIGN_SERVICE_HOST set "SIGN_SERVICE_HOST=10.88.0.46"
 if not defined SIGN_SERVICE_PORT set "SIGN_SERVICE_PORT=5000"
-set "SIGN_SERVICE_URL=http://%SIGN_SERVICE_HOST%:%SIGN_SERVICE_PORT%/sign/upload"
+set "SIGN_SERVICE_URL=http://%SIGN_SERVICE_HOST%:%SIGN_SERVICE_PORT%/sign/upload/%SIGN_FILENAME%"
 set "SIGN_TEMP_FILE=%SIGN_OUTPUT_FILE%.signed"
 
 if not exist "%SIGN_OUTPUT_FILE%" (
@@ -45,13 +45,9 @@ if not exist "%SIGN_OUTPUT_FILE%" (
   exit /b 1
 )
 
-if defined SIGN_SOURCE_PATH (
-  echo SIGN_SOURCE_PATH is ignored by the upload signing flow.
-)
-
 echo Uploading %SIGN_FILENAME% to %SIGN_SERVICE_URL%
 if exist "%SIGN_TEMP_FILE%" del /f /q "%SIGN_TEMP_FILE%" >nul 2>&1
-curl.exe --fail --silent --show-error -X POST -F "file=@%SIGN_OUTPUT_FILE%" "%SIGN_SERVICE_URL%" -o "%SIGN_TEMP_FILE%"
+curl.exe --fail --silent --show-error -H "Expect:" -T "%SIGN_OUTPUT_FILE%" "%SIGN_SERVICE_URL%" -o "%SIGN_TEMP_FILE%"
 if errorlevel 1 (
   echo Signing upload failed.
   exit /b 1
