@@ -759,16 +759,117 @@ begin
 end;
 
 
-function ArchiveSession(SessionRef: TSqlExistingSession; RemovedPaths: TStringSet;
+procedure DeleteSessionPath(const SessionPath: String);
+begin
+  if Trim(SessionPath).IsEmpty then
+    Exit;
+  AppSettings.StorePath;
+  try
+    if not AppSettings.SessionPathExists(SessionPath) then
+      Exit;
+    AppSettings.SessionPath := SessionPath;
+    AppSettings.DeleteCurrentKey;
+  finally
+    AppSettings.RestorePath;
+  end;
+end;
+
+
+function ParentSessionPath(const SessionPath: String): String;
+var
+  DelimPos: Integer;
+begin
+  DelimPos := LastDelimiter('\', SessionPath);
+  if DelimPos > 0 then
+    Result := Copy(SessionPath, 1, DelimPos - 1)
+  else
+    Result := '';
+end;
+
+
+procedure DeleteEmptyFolderChain(const FolderPath: String);
+var
+  CurrentPath: String;
+begin
+  CurrentPath := Trim(FolderPath);
+  if CurrentPath.IsEmpty then
+    Exit;
+
+  AppSettings.StorePath;
+  try
+    while not CurrentPath.IsEmpty do begin
+      if not AppSettings.SessionPathExists(CurrentPath) then begin
+        CurrentPath := ParentSessionPath(CurrentPath);
+        Continue;
+      end;
+      AppSettings.SessionPath := CurrentPath;
+      if not AppSettings.IsEmptyKey then
+        Break;
+      AppSettings.DeleteCurrentKey;
+      CurrentPath := ParentSessionPath(CurrentPath);
+    end;
+  finally
+    AppSettings.RestorePath;
+  end;
+end;
+
+
+procedure CleanupEmptyArchiveFolders(RemovedPaths: TStringSet);
+var
+  RemovedPath, FolderPath: String;
+begin
+  if RemovedPaths = nil then
+    Exit;
+
+  for RemovedPath in RemovedPaths.Keys do begin
+    FolderPath := ParentSessionPath(RemovedPath);
+    if FolderPath.IsEmpty then
+      Continue;
+    if SameText(FolderPath, ARCHIVE_ROOT_FOLDER) or StartsText(ARCHIVE_ROOT_FOLDER + '\', FolderPath) then
+      DeleteEmptyFolderChain(FolderPath);
+  end;
+
+  DeleteEmptyFolderChain(ARCHIVE_ROOT_FOLDER);
+end;
+
+
+function ShouldDeleteArchivedSession(SessionRef: TSqlExistingSession; ActiveCatalogKeys: TStringSet): Boolean;
+var
+  DatabaseName: String;
+begin
+  Result := False;
+  if (SessionRef = nil) or (ActiveCatalogKeys = nil) then
+    Exit;
+  if SessionRef.MatchDatabases.Count <= 1 then
+    Exit;
+
+  for DatabaseName in SessionRef.MatchDatabases do begin
+    if ActiveCatalogKeys.ContainsKey(MakeMatchKey(SessionRef.MatchHost, DatabaseName)) then
+      Exit(True);
+  end;
+end;
+
+
+function ArchiveSession(SessionRef: TSqlExistingSession; RemovedPaths: TStringSet; ActiveCatalogKeys: TStringSet;
   const SyncStamp: String): String;
 var
   Params: TConnectionParameters;
   CustomerFolder, ArchiveFolder, TargetPath, OldPath: String;
 begin
   Result := SessionRef.SessionPath;
+  OldPath := SessionRef.SessionPath;
+
+  if ShouldDeleteArchivedSession(SessionRef, ActiveCatalogKeys) then begin
+    DeleteSessionPath(OldPath);
+    RemovedPaths.AddOrSetValue(OldPath, True);
+    SessionRef.SessionPath := '';
+    SessionRef.Archived := True;
+    SessionRef.Handled := True;
+    Exit('');
+  end;
+
   Params := TConnectionParameters.Create(SessionRef.SessionPath);
   try
-    OldPath := SessionRef.SessionPath;
     CustomerFolder := SanitizeSessionPathPart(SessionRef.ApiCustomer);
     if CustomerFolder.IsEmpty then
       CustomerFolder := SanitizeSessionPathPart(LastPathSegment(ExtractFileDir(SessionRef.SessionPath)));
@@ -822,6 +923,7 @@ var
   MatchKey, FolderName, DisplayName, DesiredPath, FinalPath, PreviousPath, SyncStamp: String;
   RenameMap: TStringDictionary;
   RemovedPaths: TStringSet;
+  ActiveCatalogKeys: TStringSet;
   CatalogNetType: TNetType;
   CreatedCount, UpdatedCount, ArchivedCount: Integer;
 begin
@@ -841,6 +943,7 @@ begin
   Candidates := TObjectList<TSqlExistingSession>.Create(False);
   RenameMap := TStringDictionary.Create;
   RemovedPaths := TStringSet.Create;
+  ActiveCatalogKeys := TStringSet.Create;
   CreatedCount := 0;
   UpdatedCount := 0;
   ArchivedCount := 0;
@@ -848,6 +951,8 @@ begin
   try
     Catalog := FetchCatalogResponse;
     Catalog.Connections.Sort(TComparer<TSqlCatalogItem>.Construct(SortCatalogItems));
+    for Item in Catalog.Connections do
+      ActiveCatalogKeys.AddOrSetValue(MakeMatchKey(Item.Host, Item.DatabaseName), True);
     ExistingSessions := LoadExistingSessions;
 
     for Item in Catalog.Connections do begin
@@ -871,7 +976,7 @@ begin
 
       for Candidate in Candidates do begin
         if Candidate <> Winner then begin
-          ArchiveSession(Candidate, RemovedPaths, SyncStamp);
+          ArchiveSession(Candidate, RemovedPaths, ActiveCatalogKeys, SyncStamp);
           Inc(ArchivedCount);
         end;
       end;
@@ -923,11 +1028,12 @@ begin
     for Winner in ExistingSessions do begin
       if Winner.Handled or (not Winner.Managed) or Winner.Archived then
         Continue;
-      ArchiveSession(Winner, RemovedPaths, SyncStamp);
+      ArchiveSession(Winner, RemovedPaths, ActiveCatalogKeys, SyncStamp);
       Inc(ArchivedCount);
     end;
 
     UpdateLastSessionReferences(RenameMap, RemovedPaths);
+    CleanupEmptyArchiveFolders(RemovedPaths);
     if (CreatedCount = 0) and (UpdatedCount = 0) and (ArchivedCount = 0) then
       SummaryMessage := SqlMonitorTranslate('Session catalog synchronized successfully.')
     else
@@ -943,6 +1049,7 @@ begin
   Candidates.Free;
   RenameMap.Free;
   RemovedPaths.Free;
+  ActiveCatalogKeys.Free;
   ExistingSessions.Free;
   Catalog.Free;
 end;

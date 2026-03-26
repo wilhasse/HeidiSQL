@@ -977,6 +977,7 @@ object connform: Tconnform
       OnGetNodeDataSize = ListSessionsGetNodeDataSize
       OnNewText = ListSessionsNewText
       OnNodeDblClick = ListSessionsNodeDblClick
+      OnPaintText = ListSessionsPaintText
       OnStructureChange = ListSessionsStructureChange
       Touch.InteractiveGestures = [igPan, igPressAndTap]
       Touch.InteractiveGestureOptions = [igoPanSingleFingerHorizontal, igoPanSingleFingerVertical, igoPanInertia, igoPanGutter, igoParentPassthrough]

@@ -168,11 +168,19 @@ $lastCommitHashShort = substr($lastCommitHash, 0, 8);
 dumpMessage('Compile commit '.$lastCommitHash.' (revision '.$lastCommitRevision.')', true);
 chdir(BASE_DIR);
 
-dumpMessage('Remove unversioned files...');
-execCommand('git clean -dfx');
+$skipTxPull = getenv('SKIP_TX_PULL');
+$skipTxPull = $skipTxPull !== false && !in_array(strtolower(trim($skipTxPull)), ['', '0', 'false', 'no', 'off'], true);
 
-dumpMessage('Download fresh translation files ...', true);
-execCommand('extra\\internationalization\\tx.exe pull -a');
+if($skipTxPull) {
+    dumpMessage('Remove unversioned files except cached locale files...');
+    execCommand('git clean -dfx -e out/locale/');
+    dumpMessage('Skip translation download because SKIP_TX_PULL is enabled.', true);
+} else {
+    dumpMessage('Remove unversioned files...');
+    execCommand('git clean -dfx');
+    dumpMessage('Download fresh translation files ...', true);
+    execCommand('extra\internationalization\tx.exe pull -a');
+}
 
 dumpMessage('Compile .po translation files...');
 $po_files = globRecursive('out\\locale\\', '*.po');

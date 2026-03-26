@@ -11,7 +11,7 @@ interface
 uses
   Winapi.Windows, System.SysUtils, System.Classes, Vcl.Controls, Vcl.Forms, Vcl.Dialogs, Vcl.StdCtrls, Vcl.ExtCtrls, Vcl.ComCtrls,
   VirtualTrees, Vcl.Menus, Vcl.Graphics, System.Generics.Collections, Winapi.ActiveX, extra_controls, Winapi.Messages,
-  dbconnection, gnugettext, SynRegExpr, System.Types, Vcl.GraphUtil, Data.Win.ADODB, System.StrUtils,
+  dbconnection, gnugettext, SynRegExpr, System.Types, System.UITypes, Vcl.GraphUtil, Data.Win.ADODB, System.StrUtils,
   System.Math, System.Actions, System.IOUtils, Vcl.ActnList, Vcl.StdActns, VirtualTrees.BaseTree, VirtualTrees.Types, VirtualTrees.EditLink,
   VirtualTrees.BaseAncestorVCL, VirtualTrees.AncestorVCL, dbstructures;
 
@@ -200,6 +200,8 @@ type
     procedure ListSessionsBeforeCellPaint(Sender: TBaseVirtualTree;
       TargetCanvas: TCanvas; Node: PVirtualNode; Column: TColumnIndex;
       CellPaintMode: TVTCellPaintMode; CellRect: TRect; var ContentRect: TRect);
+    procedure ListSessionsPaintText(Sender: TBaseVirtualTree; const TargetCanvas: TCanvas;
+      Node: PVirtualNode; Column: TColumnIndex; TextType: TVSTTextType);
     procedure actFilterExecute(Sender: TObject);
     procedure timerEditFilterDelayTimer(Sender: TObject);
     procedure chkSSHActiveClick(Sender: TObject);
@@ -821,6 +823,7 @@ procedure Tconnform.ListSessionsGetImageIndex(Sender: TBaseVirtualTree;
 var
   Sess: PConnectionParameters;
 begin
+  Ghosted := False;
   // An edited session gets an additional pencil symbol
   if Column > 0 then
     ImageIndex := -1
@@ -828,6 +831,7 @@ begin
     ikNormal, ikSelected: begin
       Sess := Sender.GetNodeData(Node);
       ImageIndex := Sess.ImageIndex;
+      Ghosted := Sess.ApiManaged and (not Sess.IsFolder);
     end;
 
     ikOverlay:
@@ -918,6 +922,24 @@ begin
       TargetCanvas.FillRect(CellRect);
     end;
   end;
+end;
+
+procedure Tconnform.ListSessionsPaintText(Sender: TBaseVirtualTree;
+  const TargetCanvas: TCanvas; Node: PVirtualNode; Column: TColumnIndex; TextType: TVSTTextType);
+var
+  Session: PConnectionParameters;
+begin
+  Session := Sender.GetNodeData(Node);
+  if (Session = nil) or Session.IsFolder or (not Session.ApiManaged) then
+    Exit;
+
+  if Column = 0 then
+    TargetCanvas.Font.Style := TargetCanvas.Font.Style + [fsItalic];
+
+  if (vsSelected in Node.States) and (Node = Sender.FocusedNode) then
+    Exit;
+
+  TargetCanvas.Font.Color := clGrayText;
 end;
 
 procedure Tconnform.ListSessionsCompareNodes(Sender: TBaseVirtualTree; Node1,

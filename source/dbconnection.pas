@@ -309,7 +309,7 @@ type
       FIgnoreDatabasePattern: String;
       FPort, FSSHPort, FSSHLocalPort, FSSHTimeout, FCounter, FQueryTimeout, FKeepAlive, FSSLVerification: Integer;
       FSSHActive, FLoginPrompt, FCompressed, FLocalTimeZone, FFullTableStatus,
-      FWindowsAuth, FWantSSL, FIsFolder, FCleartextPluginEnabled: Boolean;
+      FWindowsAuth, FWantSSL, FIsFolder, FCleartextPluginEnabled, FApiManaged: Boolean;
       FSessionColor: TColor;
       FLastConnect: TDateTime;
       FLogFileDdl: Boolean;
@@ -367,6 +367,7 @@ type
       property SessionPath: String read FSessionPath write FSessionPath;
       property SessionName: String read GetSessionName;
       property SessionColor: TColor read FSessionColor write FSessionColor;
+      property ApiManaged: Boolean read FApiManaged write FApiManaged;
       property Hostname: String read FHostname write FHostname;
       property Port: Integer read FPort write FPort;
       property Username: String read FUsername write FUsername;
@@ -1437,6 +1438,7 @@ begin
   FLastConnect := 0;
   FCounter := 0;
   FServerVersion := '';
+  FApiManaged := False;
 end;
 
 
@@ -1509,6 +1511,7 @@ begin
     FLogFilePath := AppSettings.ReadString(asLogFilePath);
 
     FServerVersion := AppSettings.ReadString(asServerVersionFull);
+    FApiManaged := AppSettings.ReadBool(asApiManaged);
     DummyDate := 0;
     FLastConnect := StrToDateTimeDef(AppSettings.ReadString(asLastConnect), DummyDate);
     FCounter := AppSettings.ReadInt(asConnectCount);
