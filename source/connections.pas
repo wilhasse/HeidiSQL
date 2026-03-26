@@ -831,7 +831,6 @@ begin
     ikNormal, ikSelected: begin
       Sess := Sender.GetNodeData(Node);
       ImageIndex := Sess.ImageIndex;
-      Ghosted := Sess.ApiManaged and (not Sess.IsFolder);
     end;
 
     ikOverlay:
@@ -935,11 +934,6 @@ begin
 
   if Column = 0 then
     TargetCanvas.Font.Style := TargetCanvas.Font.Style + [fsItalic];
-
-  if (vsSelected in Node.States) and (Node = Sender.FocusedNode) then
-    Exit;
-
-  TargetCanvas.Font.Color := clGrayText;
 end;
 
 procedure Tconnform.ListSessionsCompareNodes(Sender: TBaseVirtualTree; Node1,
