@@ -40,6 +40,13 @@ if errorlevel 1 (
   exit /b 1
 )
 
+if exist "%SCRIPT_DIR%out\locale" (
+  powershell -NoProfile -ExecutionPolicy Bypass -Command "Copy-Item -Path (Join-Path '%SCRIPT_DIR%' 'out\locale') -Destination '%TARGET_DIR%' -Recurse -Force"
+  if errorlevel 1 (
+    echo Failed to copy locale files.
+    exit /b 1
+  )
+)
 echo Copied:
 echo   %SOURCE_EXE%
 echo to:

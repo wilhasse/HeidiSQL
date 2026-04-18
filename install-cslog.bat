@@ -52,6 +52,15 @@ if errorlevel 1 (
   echo Failed to copy runtime DLLs.
   exit /b 1
 )
+
+if exist "%SCRIPT_DIR%out\locale" (
+  powershell -NoProfile -ExecutionPolicy Bypass -Command "Copy-Item -Path (Join-Path '%SCRIPT_DIR%' 'out\locale') -Destination '%TARGET_DIR%' -Recurse -Force"
+  if errorlevel 1 (
+    echo Failed to copy locale files.
+    exit /b 1
+  )
+)
+
 reg add "%REG_KEY%" /v SqlMonitorUrl /t REG_SZ /d "%SQLMONITOR_URL%" /f >nul
 if errorlevel 1 (
   echo Failed to write SqlMonitorUrl to registry.
@@ -70,6 +79,11 @@ if errorlevel 1 (
   exit /b 1
 )
 
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$key='HKCU:\Software\HeidiSQL CSLOG'; if(-not (Test-Path $key)){ New-Item -Path $key -Force | Out-Null }; $lang=(Get-ItemProperty -Path $key -Name Language -ErrorAction SilentlyContinue).Language; if([string]::IsNullOrWhiteSpace($lang)){ New-ItemProperty -Path $key -Name Language -PropertyType String -Value 'pt_BR' -Force | Out-Null }"
+if errorlevel 1 (
+  echo Failed to initialize default language.
+  exit /b 1
+)
 
 powershell -NoProfile -ExecutionPolicy Bypass -Command "$desktop=[Environment]::GetFolderPath('Desktop'); $shortcut=Join-Path $desktop 'HeidiSQL CSLOG.lnk'; $wsh=New-Object -ComObject WScript.Shell; $lnk=$wsh.CreateShortcut($shortcut); $lnk.TargetPath='%TARGET_EXE%'; $lnk.WorkingDirectory='%TARGET_DIR%'; $lnk.IconLocation='%TARGET_EXE%,0'; $lnk.Description='HeidiSQL CSLOG managed database client'; $lnk.Save()"
 if errorlevel 1 (
