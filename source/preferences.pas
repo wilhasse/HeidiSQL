@@ -350,8 +350,13 @@ begin
   AppSettings.WriteString(asDataFontName, comboDataFontName.Text);
   AppSettings.WriteInt(asDataFontSize, updownDataFontSize.Position);
   AppSettings.WriteBool(asLogToFile, chkLogToFile.Checked);
-  AppSettings.WriteBool(asUpdatecheck, chkUpdatecheck.Checked);
-  AppSettings.WriteBool(asUpdatecheckBuilds, chkUpdatecheckBuilds.Checked);
+  if CSLOG_BUILD then begin
+    AppSettings.WriteBool(asUpdatecheck, False);
+    AppSettings.WriteBool(asUpdatecheckBuilds, False);
+  end else begin
+    AppSettings.WriteBool(asUpdatecheck, chkUpdatecheck.Checked);
+    AppSettings.WriteBool(asUpdatecheckBuilds, chkUpdatecheckBuilds.Checked);
+  end;
   AppSettings.WriteInt(asUpdatecheckInterval, updownUpdatecheckInterval.Position);
   AppSettings.WriteBool(asDoUsageStatistics, chkDoStatistics.Checked);
   AppSettings.WriteBool(asWheelZoom, chkWheelZoom.Checked);
@@ -377,7 +382,7 @@ begin
   AppSettings.WriteString(asWebSearchBaseUrl, comboWebSearchBaseUrl.Text);
   AppSettings.WriteString(asSqlMonitorUrl, editSqlMonitorUrl.Text);
   AppSettings.WriteString(asSqlMonitorApiKey, editSqlMonitorApiKey.Text);
-  AppSettings.WriteBool(asSqlMonitorCentralAuthEnabled, chkSqlMonitorCentralAuth.Checked);
+  AppSettings.WriteBool(asSqlMonitorCentralAuthEnabled, CSLOG_BUILD or chkSqlMonitorCentralAuth.Checked);
   SqlMonitorRefreshConfiguration;
 
   AppSettings.WriteInt(asMaxQueryResults, updownMaxQueryResults.Position);
@@ -709,10 +714,15 @@ begin
   chkAutoReconnect.Checked := AppSettings.ReadBool(asAutoReconnect);;
   chkAllowMultiInstances.Checked := AppSettings.ReadBool(asAllowMultipleInstances);
   chkRestoreLastDB.Checked := AppSettings.ReadBool(asRestoreLastUsedDB);
-  chkUpdatecheck.Checked := AppSettings.ReadBool(asUpdatecheck);
-  chkUpdatecheckBuilds.Checked := AppSettings.ReadBool(asUpdatecheckBuilds);
+  chkUpdatecheck.Checked := AppSettings.ReadBool(asUpdatecheck) and (not CSLOG_BUILD);
+  chkUpdatecheckBuilds.Checked := AppSettings.ReadBool(asUpdatecheckBuilds) and (not CSLOG_BUILD);
   updownUpdatecheckInterval.Position := AppSettings.ReadInt(asUpdatecheckInterval);
-  chkUpdatecheckClick(Sender);
+  chkUpdatecheck.Enabled := not CSLOG_BUILD;
+  chkUpdateCheckBuilds.Enabled := not CSLOG_BUILD;
+  editUpdatecheckInterval.Enabled := not CSLOG_BUILD;
+  updownUpdatecheckInterval.Enabled := not CSLOG_BUILD;
+  if not CSLOG_BUILD then
+    chkUpdatecheckClick(Sender);
   chkDoStatistics.Checked := AppSettings.ReadBool(asDoUsageStatistics);
   chkWheelZoom.Checked := AppSettings.ReadBool(asWheelZoom);
   chkColorBars.Checked := AppSettings.ReadBool(asDisplayBars);
@@ -742,7 +752,8 @@ begin
   try
     editSqlMonitorUrl.Text := AppSettings.ReadString(asSqlMonitorUrl);
     editSqlMonitorApiKey.Text := AppSettings.ReadString(asSqlMonitorApiKey);
-    chkSqlMonitorCentralAuth.Checked := AppSettings.ReadBool(asSqlMonitorCentralAuthEnabled);
+    chkSqlMonitorCentralAuth.Checked := CSLOG_BUILD or AppSettings.ReadBool(asSqlMonitorCentralAuthEnabled);
+    chkSqlMonitorCentralAuth.Enabled := not CSLOG_BUILD;
   finally
     AppSettings.RestorePath;
   end;

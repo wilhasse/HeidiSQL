@@ -1480,6 +1480,8 @@ begin
     FCompressed := AppSettings.ReadBool(asCompressed);
     FAllDatabases := AppSettings.ReadString(asDatabases);
     FLibraryOrProvider := AppSettings.ReadString(asLibrary, '', DefaultLibrary);
+    if FLibraryOrProvider.IsEmpty then
+      FLibraryOrProvider := DefaultLibrary;
     FComment := AppSettings.ReadString(asComment);
 
     // Auto-activate SSH for sessions created before asSSHtunnelActive was introduced

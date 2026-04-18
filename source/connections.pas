@@ -340,6 +340,26 @@ begin
   FMenuRefreshCatalog.Caption := SqlMonitorTranslate('Refresh sessions from API');
   FMenuRefreshCatalog.OnClick := menuRefreshCatalogClick;
   popupMore.Items.Insert(1, FMenuRefreshCatalog);
+
+  if CSLOG_BUILD then begin
+    btnNew.Visible := False;
+    btnSave.Visible := False;
+    btnDelete.Visible := False;
+    btnImportSettings.Visible := False;
+    menuSave.Visible := False;
+    menuSaveAs.Visible := False;
+    menuDelete.Visible := False;
+    menuRename.Visible := False;
+    menuNewSessionInRoot.Visible := False;
+    menuNewFolderInRoot.Visible := False;
+    menuContextNewFolderInFolder.Visible := False;
+    menuContextNewSessionInFolder.Visible := False;
+    menuNewSessionInFolder.Visible := False;
+    menuNewFolderInFolder.Visible := False;
+    Importsettingsfile1.Visible := False;
+    Exportsettingsfile1.Visible := False;
+    Checkforupdates1.Visible := False;
+  end;
 end;
 
 
@@ -361,10 +381,17 @@ begin
   SessionNames := NodeSessionNames(ParentNode, RegKey);
   for i:=0 to SessionNames.Count-1 do begin
     Params := TConnectionParameters.Create(RegKey+SessionNames[i]);
+    if CSLOG_BUILD and (not Params.IsFolder) and (not Params.ApiManaged) then begin
+      Params.Free;
+      Continue;
+    end;
+
     SessNode := ListSessions.AddChild(ParentNode, PConnectionParameters(Params));
     if Params.IsFolder then begin
       SessNode.Dummy := 1; // We use this Byte value later in CompareNodes
       RefreshSessions(SessNode);
+      if CSLOG_BUILD and (SessNode.ChildCount = 0) then
+        ListSessions.DeleteNode(SessNode);
     end
     else begin
       SessNode.Dummy := 0;
@@ -496,6 +523,11 @@ var
   Sess: PConnectionParameters;
   Conn: TDBConnection;
 begin
+  if CSLOG_BUILD then begin
+    MessageDialog(SqlMonitorTranslate('This CSLOG build manages sessions from the API catalog. Use stock HeidiSQL for custom connections.'), mtInformation, [mbOK]);
+    Exit;
+  end;
+
   // Overtake edited values for current parameter object and save to registry
   if Assigned(ListSessions.FocusedNode) then begin
     Sess := ListSessions.GetNodeData(ListSessions.FocusedNode);
@@ -617,6 +649,11 @@ var
   Node: PVirtualNode;
   SessionNames: TStringList;
 begin
+  if CSLOG_BUILD then begin
+    MessageDialog(SqlMonitorTranslate('This CSLOG build manages sessions from the API catalog. Use stock HeidiSQL for custom connections.'), mtInformation, [mbOK]);
+    Exit;
+  end;
+
   // Save session as ...
   newName := _('Enter new session name ...');
   NameOK := False;
@@ -643,6 +680,11 @@ end;
 
 procedure Tconnform.btnImportSettingsClick(Sender: TObject);
 begin
+  if CSLOG_BUILD then begin
+    MessageDialog(SqlMonitorTranslate('This CSLOG build manages sessions from the API catalog. Use stock HeidiSQL for custom connections.'), mtInformation, [mbOK]);
+    Exit;
+  end;
+
   MainForm.actImportSettings.Execute;
   FSettingsImportWaitTime := 0;
   timerSettingsImport.Enabled := MainForm.ImportSettingsDone;
@@ -672,6 +714,11 @@ var
   ParentPath: String;
   SiblingSessionNames: TStringList;
 begin
+  if CSLOG_BUILD then begin
+    MessageDialog(SqlMonitorTranslate('This CSLOG build manages sessions from the API catalog. Use stock HeidiSQL for custom connections.'), mtInformation, [mbOK]);
+    Exit;
+  end;
+
   // Create new session or folder
   FinalizeModifications(CanProceed);
   if not CanProceed then
@@ -722,6 +769,11 @@ var
   Sess: PConnectionParameters;
   Node, FocusNode: PVirtualNode;
 begin
+  if CSLOG_BUILD then begin
+    MessageDialog(SqlMonitorTranslate('This CSLOG build manages sessions from the API catalog. Use stock HeidiSQL for custom connections.'), mtInformation, [mbOK]);
+    Exit;
+  end;
+
   Node := ListSessions.FocusedNode;
   Sess := ListSessions.GetNodeData(Node);
   if MessageDialog(f_('Delete session "%s"?', [Sess.SessionName]), mtConfirmation, [mbYes, mbCancel]) = mrYes then
@@ -767,6 +819,8 @@ begin
   FromReg := ListSessions.GetNodeData(ListSessions.FocusedNode);
   if FromReg.IsFolder then begin
     Result := FromReg^;
+  end else if CSLOG_BUILD then begin
+    Result := TConnectionParameters.Create(SelectedSessionPath);
   end else begin
     Result := TConnectionParameters.Create;
     Result.SessionPath := SelectedSessionPath;
@@ -958,6 +1012,11 @@ end;
 procedure Tconnform.ListSessionsCreateEditor(Sender: TBaseVirtualTree; Node: PVirtualNode;
   Column: TColumnIndex; out EditLink: IVTEditLink);
 begin
+  if CSLOG_BUILD then begin
+    EditLink := nil;
+    Exit;
+  end;
+
   // Use our own text editor to rename a session
   EditLink := TInplaceEditorLink.Create(Sender as TVirtualStringTree, True, nil);
 end;
@@ -973,6 +1032,9 @@ var
   ParentKey: String;
   SiblingSessions: TStringList;
 begin
+  if CSLOG_BUILD then
+    Exit;
+
   TargetNode := Sender.GetNodeAt(Pt.X, Pt.Y);
   if not Assigned(TargetNode) then begin
     MessageBeep(MB_ICONEXCLAMATION);
@@ -1024,6 +1086,11 @@ var
   TargetNode, ParentNode: PVirtualNode;
   TargetSess: PConnectionParameters;
 begin
+  if CSLOG_BUILD then begin
+    Accept := False;
+    Exit;
+  end;
+
   // Allow node dragging everywhere except within the current folder
   TargetNode := Sender.GetNodeAt(Pt.X, Pt.Y);
   TargetSess := Sender.GetNodeData(TargetNode);
@@ -1087,10 +1154,15 @@ begin
 
   if not SessionFocused then begin
     PageControlDetails.ActivePage := tabStart;
-    if ListSessions.RootNodeCount = 0 then
-      lblHelp.Caption := f_('New here? In order to connect to a server, you have to create a so called '+
-        '"session" at first. Just click the "New" button on the bottom left to create your first session. '+
-        'Give it a friendly name (e.g. "Local DB server") so you''ll recall it the next time you start %s.', [APPNAME])
+    if ListSessions.RootNodeCount = 0 then begin
+      if CSLOG_BUILD then
+        lblHelp.Caption := SqlMonitorTranslate('No managed sessions were loaded yet. Use More > Refresh sessions from API, or check the SQL monitor configuration.')
+      else
+        lblHelp.Caption := f_('New here? In order to connect to a server, you have to create a so called '+
+          '"session" at first. Just click the "New" button on the bottom left to create your first session. '+
+          'Give it a friendly name (e.g. "Local DB server") so you''ll recall it the next time you start %s.', [APPNAME]);
+    end else if CSLOG_BUILD then
+      lblHelp.Caption := SqlMonitorTranslate('Sessions in this build are managed by the CSLOG API catalog. Use stock HeidiSQL for custom connections.')
     else
       lblHelp.Caption := _('Please click a session on the left list to edit parameters, doubleclick to open it.');
   end else begin
@@ -1222,6 +1294,9 @@ var
   Sess: PConnectionParameters;
   SiblingSessions: TStringList;
 begin
+  if CSLOG_BUILD then
+    Exit;
+
   // Rename session
   // Note that this is triggered only if the text was effectively changed
   Sess := Sender.GetNodeData(Node);
@@ -1470,6 +1545,11 @@ end;
 
 procedure Tconnform.menuRenameClick(Sender: TObject);
 begin
+  if CSLOG_BUILD then begin
+    MessageDialog(SqlMonitorTranslate('This CSLOG build manages sessions from the API catalog. Use stock HeidiSQL for custom connections.'), mtInformation, [mbOK]);
+    Exit;
+  end;
+
   // Start node editor to rename a session
   ListSessions.EditNode(ListSessions.FocusedNode, ListSessions.Header.MainColumn);
 end;
@@ -1703,17 +1783,66 @@ begin
       chkCleartextPluginEnabled.Enabled := Params.NetTypeGroup = ngMySQL;
       editLogFilePath.Enabled := Params.LogFileDdl or Params.LogFileDml;
 
+      if CSLOG_BUILD then begin
+        comboNetType.Enabled := False;
+        comboLibrary.Enabled := False;
+        editHost.Enabled := False;
+        editUsername.Enabled := False;
+        editPassword.Enabled := False;
+        chkLoginPrompt.Enabled := False;
+        chkWindowsAuth.Enabled := False;
+        chkCleartextPluginEnabled.Enabled := False;
+        editPort.Enabled := False;
+        updownPort.Enabled := False;
+        chkCompressed.Enabled := False;
+        editDatabases.Enabled := False;
+        ColorBoxBackgroundColor.Enabled := False;
+        memoComment.Enabled := False;
+        editStartupScript.Enabled := False;
+        chkSSHActive.Enabled := False;
+        comboSSHExe.Enabled := False;
+        editSSHhost.Enabled := False;
+        editSSHport.Enabled := False;
+        editSSHUser.Enabled := False;
+        editSSHPassword.Enabled := False;
+        editSSHTimeout.Enabled := False;
+        updownSSHTimeout.Enabled := False;
+        editSSHPrivateKey.Enabled := False;
+        editSSHlocalport.Enabled := False;
+        chkWantSSL.Enabled := False;
+        editSSLPrivateKey.Enabled := False;
+        editSSLCertificate.Enabled := False;
+        editSSLCACertificate.Enabled := False;
+        editSSLCipher.Enabled := False;
+        comboSSLVerification.Enabled := False;
+        editQueryTimeout.Enabled := False;
+        updownQueryTimeout.Enabled := False;
+        editKeepAlive.Enabled := False;
+        updownKeepAlive.Enabled := False;
+        chkLocalTimeZone.Enabled := False;
+        chkFullTableStatus.Enabled := False;
+        editIgnoreDatabasePattern.Enabled := False;
+        chkLogFileDdl.Enabled := False;
+        chkLogFileDml.Enabled := False;
+        editLogFilePath.Enabled := False;
+      end;
+
       Params.Free;
     end;
   end;
 
   // Main buttons
   btnOpen.Enabled := SessionFocused;
-  btnSave.Enabled := SessionFocused and FSessionModified;
-  btnDelete.Enabled := SessionFocused or FolderFocused;
+  btnSave.Enabled := SessionFocused and FSessionModified and (not CSLOG_BUILD);
+  btnDelete.Enabled := (SessionFocused or FolderFocused) and (not CSLOG_BUILD);
+  btnNew.Enabled := not CSLOG_BUILD;
+  btnImportSettings.Enabled := not CSLOG_BUILD;
   menuSave.Enabled := btnSave.Enabled;
-  menuSaveAs.Enabled := SessionFocused;
+  menuSaveAs.Enabled := SessionFocused and (not CSLOG_BUILD);
   menuDelete.Enabled := btnDelete.Enabled;
+  menuRename.Enabled := menuRename.Enabled and (not CSLOG_BUILD);
+  menuNewSessionInFolder.Enabled := menuNewSessionInFolder.Enabled and (not CSLOG_BUILD);
+  menuNewFolderInFolder.Enabled := menuNewFolderInFolder.Enabled and (not CSLOG_BUILD);
   TExtForm.PageControlTabHighlight(PageControlDetails);
 
   Caption := GetWindowCaption;

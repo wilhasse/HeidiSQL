@@ -306,7 +306,13 @@ begin
   else if SameText(MsgId, 'The central service returned an incomplete session catalog entry.') then
     Result := 'O servico central retornou um item incompleto no catalogo de sessoes.'
   else if SameText(MsgId, 'The central service returned an unsupported network type for catalog entry "%s".') then
-    Result := 'O servico central retornou um tipo de rede nao suportado para o item "%s" do catalogo.';
+    Result := 'O servico central retornou um tipo de rede nao suportado para o item "%s" do catalogo.'
+  else if SameText(MsgId, 'This CSLOG build manages sessions from the API catalog. Use stock HeidiSQL for custom connections.') then
+    Result := 'Esta versao CSLOG gerencia sessoes pelo catalogo da API. Use o HeidiSQL original para conexoes personalizadas.'
+  else if SameText(MsgId, 'No managed sessions were loaded yet. Use More > Refresh sessions from API, or check the SQL monitor configuration.') then
+    Result := 'Nenhuma sessao gerenciada foi carregada. Use Mais > Atualizar sessoes da API, ou verifique a configuracao do monitor SQL.'
+  else if SameText(MsgId, 'Sessions in this build are managed by the CSLOG API catalog. Use stock HeidiSQL for custom connections.') then
+    Result := 'As sessoes desta versao sao gerenciadas pelo catalogo da API CSLOG. Use o HeidiSQL original para conexoes personalizadas.';
 end;
 
 
@@ -658,7 +664,10 @@ end;
 function SqlMonitorCentralAuthEnabled: Boolean;
 begin
   EnsureSqlMonitorConfigurationLoaded;
-  Result := CachedSqlMonitorCentralAuthEnabled;
+  if CSLOG_BUILD then
+    Result := True
+  else
+    Result := CachedSqlMonitorCentralAuthEnabled;
 end;
 
 

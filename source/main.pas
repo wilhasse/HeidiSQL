@@ -1922,6 +1922,10 @@ var
   CmdCap: String;
 begin
   caption := APPNAME;
+  if CSLOG_BUILD then begin
+    actUpdateCheck.Enabled := False;
+    menuUpdateCheck.Visible := False;
+  end;
 
   // Load preferred ImageCollection into VirtualImageList
   PrepareImageList;
@@ -2235,7 +2239,7 @@ var
   DlgResult: TModalResult;
   SessionManager: TConnForm;
 begin
-  if AppSettings.ReadBool(asUpdatecheck) then begin
+  if (not CSLOG_BUILD) and AppSettings.ReadBool(asUpdatecheck) then begin
     // Do an updatecheck if checked in settings
     LastUpdatecheck := StrToDateTimeDef(AppSettings.ReadString(asUpdatecheckLastrun), DateTimeNever);
     UpdatecheckInterval := AppSettings.ReadInt(asUpdatecheckInterval);
@@ -2321,7 +2325,7 @@ begin
   // Delete scheduled task from previous
   if RunFrom = 'scheduler' then begin
     DeleteRestartTask;
-    if HasDonated(False) <> nbTrue then begin
+    if (not CSLOG_BUILD) and (HasDonated(False) <> nbTrue) then begin
       apphelpers.ShellExec(APPDOMAIN + 'after-updatecheck?rev=' + AppVerRevision.ToString);
     end;
   end;
@@ -4704,6 +4708,9 @@ procedure TMainForm.actUpdateCheckExecute(Sender: TObject);
 var
   frm : TfrmUpdateCheck;
 begin
+  if CSLOG_BUILD then
+    Exit;
+
   frm := TfrmUpdateCheck.Create(Self);
   frm.ShowModal;
   frm.Free; // FormClose has no caFree, as it may not have been called

@@ -18,7 +18,7 @@
 
 $start_dir = getcwd();
 
-const APPNAME = 'HeidiSQL';
+const APPNAME = 'HeidiSQL CSLOG';
 const BIN_NAME = 'heidisql'; // file name of main executable
 const DS = DIRECTORY_SEPARATOR;
 const BASE_DIR = __DIR__ . DS;

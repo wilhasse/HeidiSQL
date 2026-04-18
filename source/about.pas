@@ -113,6 +113,7 @@ begin
   lblAppName.Font.Size := Round(lblAppName.Font.Size * 1.5);
   lblAppName.Font.Style := [fsBold];
 
+  btnUpdateCheck.Visible := not CSLOG_BUILD;
   btnDonate.Caption := f_('Donate to the %s project', [APPNAME]);
   btnDonate.Visible := MainForm.HasDonated(False) <> nbTrue;
   btnDonate.OnClick := MainForm.DonateClick;

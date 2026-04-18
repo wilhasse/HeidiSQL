@@ -4223,7 +4223,7 @@ begin
   InitSetting(asWebSearchBaseUrl,                 'WebSearchBaseUrl',                      0, False, 'https://www.ecosia.org/search?q=%query');
   InitSetting(asSqlMonitorUrl,                    'SqlMonitorUrl',                         0, False, '');
   InitSetting(asSqlMonitorApiKey,                 'SqlMonitorApiKey',                      0, False, '');
-  InitSetting(asSqlMonitorCentralAuthEnabled,     'SqlMonitorCentralAuthEnabled',          0, False);
+  InitSetting(asSqlMonitorCentralAuthEnabled,     'SqlMonitorCentralAuthEnabled',          0, CSLOG_BUILD);
   InitSetting(asMaxQueryResults,                  'MaxQueryResults',                       10);
   InitSetting(asLogErrors,                        'LogErrors',                             0, True);
   InitSetting(asLogUserSQL,                       'LogUserSQL',                            0, True);

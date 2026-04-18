@@ -12,7 +12,8 @@ const
   TEXT_NULL = '(NULL)';
 
   // General things
-  APPNAME = 'HeidiSQL';
+  CSLOG_BUILD = True;
+  APPNAME = 'HeidiSQL CSLOG';
   APPDOMAIN = 'https://www.heidisql.com/';
   REGKEY_SESSIONS = 'Servers';
   REGKEY_QUERYHISTORY = 'QueryHistory';
