@@ -1,4 +1,4 @@
-﻿unit sqlmonitor;
+unit sqlmonitor;
 
 interface
 
@@ -178,6 +178,7 @@ var
   SessionRegistrationsLock: TObject;
   SqlMonitorConfigLock: TObject;
   SqlMonitorAuthLock: TObject;
+  TicketCacheLock: TObject;
   SqlMonitorConfigInitialized: Boolean;
   CachedSqlMonitorUrl: String;
   CachedSqlMonitorApiKey: String;
@@ -186,6 +187,7 @@ var
   CachedCentralAuthExpiresAt: TDateTime;
   CachedCentralAuthToken: String;
   CachedCentralAuthUsername: String;
+  CachedTicketNumbers: TDictionary<String, String>;
 
 function SqlMonitorTranslate(const MsgId: String): String;
 var
@@ -413,6 +415,8 @@ begin
 end;
 
 
+
+procedure ClearCachedTicketNumbers; forward;
 procedure ClearCentralAuthSession;
 begin
   System.TMonitor.Enter(SqlMonitorAuthLock);
@@ -424,6 +428,7 @@ begin
   finally
     System.TMonitor.Exit(SqlMonitorAuthLock);
   end;
+  ClearCachedTicketNumbers;
 end;
 
 
@@ -504,6 +509,64 @@ begin
     Result := Connection.Parameters.DefaultPort;
 end;
 
+
+function BuildTicketCacheKey(Connection: TDBConnection): String;
+var
+  DatabaseName: String;
+begin
+  Result := '';
+  if Connection = nil then
+    Exit;
+  DatabaseName := LowerCase(ResolveTargetDatabase(Connection, ''));
+  Result := LowerCase(Connection.Parameters.Hostname) + '|' + IntToStr(GetConnectionTargetPort(Connection)) + '|' + DatabaseName;
+end;
+
+
+function GetCachedTicketNumber(Connection: TDBConnection): String;
+var
+  Key: String;
+begin
+  Result := '';
+  Key := BuildTicketCacheKey(Connection);
+  if Key.IsEmpty then
+    Exit;
+  System.TMonitor.Enter(TicketCacheLock);
+  try
+    CachedTicketNumbers.TryGetValue(Key, Result);
+  finally
+    System.TMonitor.Exit(TicketCacheLock);
+  end;
+end;
+
+
+procedure CacheTicketNumber(Connection: TDBConnection; const TicketNumber: String);
+var
+  Key: String;
+begin
+  Key := BuildTicketCacheKey(Connection);
+  if Key.IsEmpty then
+    Exit;
+  System.TMonitor.Enter(TicketCacheLock);
+  try
+    if TicketNumber.IsEmpty then
+      CachedTicketNumbers.Remove(Key)
+    else
+      CachedTicketNumbers.AddOrSetValue(Key, TicketNumber);
+  finally
+    System.TMonitor.Exit(TicketCacheLock);
+  end;
+end;
+
+
+procedure ClearCachedTicketNumbers;
+begin
+  System.TMonitor.Enter(TicketCacheLock);
+  try
+    CachedTicketNumbers.Clear;
+  finally
+    System.TMonitor.Exit(TicketCacheLock);
+  end;
+end;
 
 function ReadAppSettingSafely(SettingIndex: TAppSettingIndex): String;
 begin
@@ -1076,7 +1139,7 @@ begin
 end;
 
 
-function PromptForTicketNumber(StatementSql: TStrings; HasGuardedWrites: Boolean; out TicketNumber: String): Boolean;
+function PromptForTicketNumber(Connection: TDBConnection; StatementSql: TStrings; HasGuardedWrites: Boolean; out TicketNumber: String): Boolean;
 var
   Dialog: TForm;
   IntroLabel, TicketLabel: TLabel;
@@ -1123,7 +1186,7 @@ begin
     TicketEdit.Top := TicketLabel.Top + TicketLabel.Height + 6;
     TicketEdit.Width := Dialog.ClientWidth - 32;
     TicketEdit.Anchors := [akLeft, akTop, akRight];
-    TicketEdit.Text := '';
+    TicketEdit.Text := GetCachedTicketNumber(Connection);
     TicketLabel.FocusControl := TicketEdit;
 
     SummaryMemo := TMemo.Create(Dialog);
@@ -1172,6 +1235,7 @@ begin
     if Dialog.ShowModal <> mrOk then
       Exit(False);
     TicketNumber := Trim(TicketEdit.Text);
+    CacheTicketNumber(Connection, TicketNumber);
     Result := True;
   finally
     Dialog.Free;
@@ -1198,7 +1262,7 @@ begin
   TicketNumber := '';
 
   if HasWrites then begin
-    if not PromptForTicketNumber(StatementSql, HasGuardedWrites, TicketNumber) then begin
+    if not PromptForTicketNumber(Connection, StatementSql, HasGuardedWrites, TicketNumber) then begin
       Result := False;
       Exit;
     end;
@@ -2256,12 +2320,20 @@ initialization
   SessionRegistrationsLock := TObject.Create;
   SqlMonitorConfigLock := TObject.Create;
   SqlMonitorAuthLock := TObject.Create;
+  TicketCacheLock := TObject.Create;
+  CachedTicketNumbers := TDictionary<String, String>.Create;
 
 finalization
+  CachedTicketNumbers.Free;
+  TicketCacheLock.Free;
   SessionRegistrations.Free;
   SessionRegistrationsLock.Free;
   SqlMonitorConfigLock.Free;
   SqlMonitorAuthLock.Free;
 
 end.
+
+
+
+
 

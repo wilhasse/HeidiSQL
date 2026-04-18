@@ -2467,9 +2467,9 @@ object MainForm: TMainForm
     end
     object actDataPostChanges: TAction
       Category = 'Data'
-      Caption = 'P&ost'
+      Caption = 'P&ost changes'
       Enabled = False
-      Hint = 'Post'
+      Hint = 'Post pending changes'
       ImageIndex = 55
       ImageName = 'icons8-checked'
       ShortCut = 16397
@@ -25768,3 +25768,4 @@ object MainForm: TMainForm
     end
   end
 end
+

@@ -1,4 +1,4 @@
-﻿unit Main;
+unit Main;
 
 
 // -------------------------------------
@@ -1298,6 +1298,9 @@ type
     function GetCurrentQuery(Tab: TQueryTab): String;
     function BatchHasGuardedWrites(Batch: TSQLBatch): Boolean;
     function PrepareSqlMonitorExecution(Connection: TDBConnection; Batch: TSQLBatch; out Context: TSqlMonitorExecutionContext): Boolean;
+    function GridHasPendingChanges(Grid: TBaseVirtualTree): Boolean;
+    function EnsureGridChangesPosted(Grid: TBaseVirtualTree; const ActionDescription: String): Boolean;
+    function QueryTabHasPendingGridChanges(Tab: TQueryTab; out PendingGrid: TVirtualStringTree): Boolean;
     procedure SetActiveDatabase(db: String; Connection: TDBConnection);
     procedure SetActiveDBObj(Obj: TDBObject);
     procedure ToggleFilterPanel(ForceVisible: Boolean = False);
@@ -1820,6 +1823,11 @@ var
 begin
   // Prompt on modified changes
   CanClose := True;
+
+  if not EnsureGridChangesPosted(DataGrid, _('closing HeidiSQL')) then begin
+    CanClose := False;
+    Exit;
+  end;
 
   // Unsaved changes in some query tab?
   // Also backups automatically if option is activated
@@ -2508,7 +2516,7 @@ const
   begin
     TabLoadTime := GetTickCount64 - TabLoadStart;
     if TabLoadTime > SlowLoadMilliseconds then begin
-      SlowTabs.Add('• ' + Trim(Tab.TabSheet.Caption) + ' (' + FormatTimeNumber(TabLoadTime / 1000, True) + ')');
+      SlowTabs.Add('� ' + Trim(Tab.TabSheet.Caption) + ' (' + FormatTimeNumber(TabLoadTime / 1000, True) + ')');
     end;
   end;
 begin
@@ -2662,6 +2670,8 @@ var
 begin
   // Disconnect active connection. If it's the last, exit application
   Connection := ActiveConnection;
+  if not EnsureGridChangesPosted(ActiveGrid, _('disconnecting the current session')) then
+    Exit;
   // Find and remove connection node from tree
   Node := GetRootNode(DBtree, Connection);
   DBTree.DeleteNode(Node);
@@ -2696,8 +2706,6 @@ begin
       // Post pending UPDATE and release current table with result
       Results := GridResult(DataGrid);
       if Assigned(Results) then begin
-        if Results.Modified then
-          actDataPostChangesExecute(DataGrid);
         if DataGridResult = Results then begin
           FreeAndNil(DataGridResult);
           DataGridTable := nil;
@@ -3290,6 +3298,63 @@ begin
 end;
 
 
+function TMainForm.GridHasPendingChanges(Grid: TBaseVirtualTree): Boolean;
+var
+  Results: TDBQuery;
+begin
+  Result := False;
+  if Grid = nil then
+    Exit;
+  Results := GridResult(Grid);
+  Result := Assigned(Results) and Results.HasPendingChanges;
+end;
+
+
+function TMainForm.EnsureGridChangesPosted(Grid: TBaseVirtualTree; const ActionDescription: String): Boolean;
+var
+  MessageText: String;
+  TargetGrid: TVirtualStringTree;
+begin
+  Result := True;
+  if not GridHasPendingChanges(Grid) then
+    Exit;
+
+  if ActionDescription.IsEmpty then
+    MessageText := _('There are pending grid changes. Use "Post changes" or "Cancel editing" before continuing.')
+  else
+    MessageText := f_('There are pending grid changes. Use "Post changes" or "Cancel editing" before %s.', [ActionDescription]);
+
+  MessageDialog(_('Pending grid changes'), MessageText, mtWarning, [mbOK]);
+
+  if Grid is TVirtualStringTree then begin
+    TargetGrid := TVirtualStringTree(Grid);
+    if TargetGrid = DataGrid then
+      SetMainTab(tabData)
+    else if Assigned(TargetGrid.Parent) and (TargetGrid.Parent is TTabSheet) then
+      SetMainTab(TTabSheet(TargetGrid.Parent));
+    TargetGrid.SetFocus;
+  end;
+
+  Result := False;
+end;
+
+
+function TMainForm.QueryTabHasPendingGridChanges(Tab: TQueryTab; out PendingGrid: TVirtualStringTree): Boolean;
+var
+  ResultTab: TResultTab;
+begin
+  Result := False;
+  PendingGrid := nil;
+  if Tab = nil then
+    Exit;
+  for ResultTab in Tab.ResultTabs do begin
+    if Assigned(ResultTab.Results) and ResultTab.Results.HasPendingChanges then begin
+      PendingGrid := ResultTab.Grid;
+      Exit(True);
+    end;
+  end;
+end;
+
 procedure TMainForm.actExecuteQueryExecute(Sender: TObject);
 var
   ProfileNode: PVirtualNode;
@@ -3471,7 +3536,7 @@ begin
       end;
     end;
     TabCaption := Trim(TabCaption);
-    TabCaption := TabCaption + ' (' + FormatNumber(Results.RecordCount) + 'r × ' + FormatNumber(Results.ColumnCount) + 'c)';
+    TabCaption := TabCaption + ' (' + FormatNumber(Results.RecordCount) + 'r � ' + FormatNumber(Results.ColumnCount) + 'c)';
     Tab.tabsetQuery.Tabs.Add(TabCaption);
     NewTab.Grid.Name := Format('Tab%dGrid%d', [Tab.Number, NewTab.TabIndex+1]);
 
@@ -5659,9 +5724,7 @@ begin
     Grid := ActiveGrid;
   Results := GridResult(Grid);
   Results.SaveModifications;
-  // Node needs a repaint to remove red triangles
-  if Assigned(Grid.FocusedNode) then
-    Grid.InvalidateNode(Grid.FocusedNode);
+  Grid.Invalidate;
   DisplayRowCountStats(Grid);
 end;
 
@@ -5954,7 +6017,7 @@ var
   DrawFormat: Cardinal;
   ColInfo: TTableColumn;
 const
-  NumSortChars: Array of Char = ['¹','²','³','⁴','⁵','⁶','⁷','⁸','⁹','⁺'];
+  NumSortChars: Array of Char = ['�','�','�','4','5','6','7','8','?','?'];
 
   procedure GetSortIndex(Column: TVirtualTreeColumn; var SortIndex: Integer; var SortDirection: VirtualTrees.TSortDirection);
   var
@@ -6055,10 +6118,10 @@ begin
       if ColSortDirection = sdAscending then begin
         // This is a bit wrong - but the "Ubuntu" font doesn't have the triangle character,
         // which seems available on many Windows fonts only. See #1090
-        SortText := IfThen(IsWine, '↑', '▲');
+        SortText := IfThen(IsWine, '?', '?');
         NumCharTop := 0;
       end else begin
-        SortText := IfThen(IsWine, '↓', '▼');
+        SortText := IfThen(IsWine, '?', '?');
         NumCharTop := 5;
       end;
       // Paint arrow:
@@ -6530,6 +6593,8 @@ begin
     LogSQL('Cancelling tree edit mode on '+ActiveGridEditor.Tree.Name, lcDebug);
     ActiveGridEditor.Tree.CancelEditNode;
   end;
+  if not EnsureGridChangesPosted(ActiveGrid, _('changing the active tab')) then
+    AllowChange := False;
 end;
 
 
@@ -6730,7 +6795,7 @@ end;
 procedure TMainForm.ValidateControls(Sender: TObject);
 var
   inDataTab, inDataOrQueryTab, inDataOrQueryTabNotEmpty, inGrid: Boolean;
-  HasConnection, GridHasChanges, EnableTimestamp: Boolean;
+  HasConnection, GridHasChanges, CurrentRowHasChanges, EnableTimestamp: Boolean;
   Grid: TVirtualStringTree;
   inSynMemo, inSynMemoEditable: Boolean;
   Results: TDBQuery;
@@ -6746,6 +6811,7 @@ begin
   HasConnection := Conn <> nil;
   Results := nil;
   GridHasChanges := False;
+  CurrentRowHasChanges := False;
   EnableTimestamp := False;
   CellText := '';
   if HasConnection and Assigned(Grid) then begin
@@ -6754,7 +6820,8 @@ begin
     if (Results<>nil) and Assigned(Grid.FocusedNode) then begin
       RowNum := Grid.GetNodeData(Grid.FocusedNode);
       Results.RecNo := RowNum^;
-      GridHasChanges := Results.Modified or Results.Inserted;
+      GridHasChanges := Results.HasPendingChanges;
+      CurrentRowHasChanges := Results.CurrentRowModified or Results.Inserted;
       if ResultCol > NoColumn then begin
         EnableTimestamp := Results.DataType(ResultCol).Category in [dtcInteger, dtcReal];
         CellText := Results.Col(ResultCol, True);
@@ -6774,7 +6841,7 @@ begin
   actDataFirst.Enabled := HasConnection and inDataOrQueryTabNotEmpty and inGrid;
   actDataLast.Enabled := HasConnection and inDataOrQueryTabNotEmpty and inGrid;
   actDataPostChanges.Enabled := HasConnection and GridHasChanges;
-  actDataCancelChanges.Enabled := HasConnection and GridHasChanges;
+  actDataCancelChanges.Enabled := HasConnection and CurrentRowHasChanges;
   actDataSaveBlobToFile.Enabled := HasConnection and inDataOrQueryTabNotEmpty and Assigned(Grid.FocusedNode);
   actGridEditFunction.Enabled := HasConnection and inDataOrQueryTabNotEmpty and Assigned(Grid.FocusedNode);
   actDataPreview.Enabled := HasConnection and inDataOrQueryTabNotEmpty and Assigned(Grid.FocusedNode);
@@ -7714,7 +7781,7 @@ begin
         miFunction.Caption := '&-';
       miFunction.Hint := SQLFuncs[j].Name + SQLFuncs[j].Declaration + ' - ' + StrEllipsis(SQLFuncs[j].Description, 200);
       // Prevent generating a seperator for ShortHint and LongHint
-      miFunction.Hint := StringReplace( miFunction.Hint, '|', '¦', [rfReplaceAll] );
+      miFunction.Hint := StringReplace( miFunction.Hint, '|', '�', [rfReplaceAll] );
       miFunction.Tag := j;
       // Place menuitem on menu
       miFunction.OnClick := insertFunction;
@@ -8253,7 +8320,7 @@ begin
         miFunction.Caption := '&-';
       miFunction.Hint := SQLFuncs[j].Name + SQLFuncs[j].Declaration + ' - ' + StrEllipsis(SQLFuncs[j].Description, 200);
       // Prevent generating a seperator for ShortHint and LongHint
-      miFunction.Hint := StringReplace( miFunction.Hint, '|', '¦', [rfReplaceAll] );
+      miFunction.Hint := StringReplace( miFunction.Hint, '|', '�', [rfReplaceAll] );
       miFunction.Tag := j;
       // Place menuitem on menu
       miFunction.OnClick := insertFunction;
@@ -8832,7 +8899,7 @@ begin
     HintSQL[i] := StrEllipsis(HintSQL[i], 100);
     HintSQL[i] := StringReplace(HintSQL[i], #9, '    ', [rfReplaceAll]);
   end;
-  BalloonHint1.Description := FormatNumber(ResultTab.Results.ColumnCount) + ' columns × ' +
+  BalloonHint1.Description := FormatNumber(ResultTab.Results.ColumnCount) + ' columns � ' +
     FormatNumber(ResultTab.Results.RecordCount) + ' rows' + CRLF + CRLF +
     Trim(StrEllipsis(HintSQL.Text, SIZE_KB));
   Rect := Tabs.ItemRect(idx);
@@ -10173,16 +10240,20 @@ begin
 end;
 
 
-procedure TMainForm.DBtreeFocusChanging(Sender: TBaseVirtualTree; OldNode,
-  NewNode: PVirtualNode; OldColumn, NewColumn: TColumnIndex;
-  var Allowed: Boolean);
-begin
-  // Check if some editor has unsaved changes
-  if Assigned(ActiveObjectEditor) and Assigned(NewNode) and (NewNode <> OldNode) and (not FTreeRefreshInProgress) then begin
-    Allowed := not (ActiveObjectEditor.DeInit in [mrAbort, mrCancel]);
-    DBTree.Selected[DBTree.FocusedNode] := not Allowed;
+procedure TMainForm.DBtreeFocusChanging(Sender: TBaseVirtualTree; OldNode,
+  NewNode: PVirtualNode; OldColumn, NewColumn: TColumnIndex;
+  var Allowed: Boolean);
+begin
+  // Check if some editor has unsaved changes
+  if Assigned(ActiveObjectEditor) and Assigned(NewNode) and (NewNode <> OldNode) and (not FTreeRefreshInProgress) then begin
+    Allowed := not (ActiveObjectEditor.DeInit in [mrAbort, mrCancel]);
+    DBTree.Selected[DBTree.FocusedNode] := not Allowed;
+    if not Allowed then
+      Exit;
   end else
     Allowed := NewNode <> OldNode;
+  if Allowed and Assigned(NewNode) and (NewNode <> OldNode) and (not FTreeRefreshInProgress) then
+    Allowed := EnsureGridChangesPosted(ActiveGrid, _('changing the selected object'));
 end;
 
 
@@ -11015,16 +11086,13 @@ var
   Results: TDBQuery;
   RowNum: PInt64;
 begin
-  // Detect changed focus and update row
+  // Detect changed focus and keep modifications buffered until the user posts them.
   Allowed := True;
   Results := GridResult(Sender);
   if Assigned(OldNode) and (OldNode <> NewNode) then begin
     RowNum := Sender.GetNodeData(OldNode);
     Results.RecNo := RowNum^;
-    if Results.Modified then begin
-      Allowed := Results.SaveModifications;
-      DisplayRowCountStats(Sender);
-    end else if Results.Inserted then begin
+    if Results.Inserted and (not Results.CurrentRowModified) then begin
       if NewNode <> nil then begin
         Results.DiscardModifications;
         Sender.DeleteNode(OldNode);
@@ -11644,21 +11712,11 @@ procedure TMainForm.AnyGridMouseUp(Sender: TObject; Button: TMouseButton;
   Shift: TShiftState; X, Y: Integer);
 var
   Grid: TVirtualStringTree;
-  Hit: THitInfo;
-  Results: TDBQuery;
 begin
-  // Detect mouse hit in grid whitespace and apply changes.
+  // Keep grid edits buffered until the user explicitly posts them.
   Grid := Sender as TVirtualStringTree;
-  if not Assigned(Grid.FocusedNode) then
-    Exit;
-  Grid.GetHitTestInfoAt(X, Y, False, Hit);
-  if (Hit.HitNode = nil) or (Hit.HitColumn = NoColumn) or (Hit.HitColumn = InvalidColumn) then begin
-    Results := GridResult(Grid);
-    if Results.Modified then begin
-      Results.SaveModifications;
-      DisplayRowCountStats(Grid);
-    end;
-  end;
+  if Assigned(Grid.FocusedNode) then
+    ValidateControls(Grid);
 end;
 
 
@@ -13474,9 +13532,13 @@ end;
 function TMainForm.ConfirmTabClose(PageIndex: Integer; AppIsClosing: Boolean): Boolean;
 var
   Tab: TQueryTab;
+  PendingGrid: TVirtualStringTree;
 begin
   Tab := QueryTabs[PageIndex-tabQuery.PageIndex];
-  if Tab.QueryRunning then begin
+  if QueryTabHasPendingGridChanges(Tab, PendingGrid) then begin
+    Tab.TabSheet.PageControl.ActivePage := Tab.TabSheet;
+    Result := EnsureGridChangesPosted(PendingGrid, _('closing the query tab'));
+  end else if Tab.QueryRunning then begin
     LogSQL(_('Cannot close tab with running query. Please wait until query has finished.'));
     Result := False;
   end else if not Tab.Memo.Modified then begin
@@ -16000,4 +16062,7 @@ begin
 end;
 
 end.
+
+
+
 

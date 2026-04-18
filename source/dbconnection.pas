@@ -870,6 +870,8 @@ type
       function HasFullData: Boolean;
       function Modified(Column: Integer): Boolean; overload;
       function Modified: Boolean; overload;
+      function CurrentRowModified: Boolean;
+      function HasPendingChanges: Boolean;
       function Inserted: Boolean;
       function SaveModifications: Boolean;
       function DatabaseName: String; virtual; abstract;
@@ -9954,6 +9956,38 @@ begin
 end;
 
 
+function TDBQuery.CurrentRowModified: Boolean;
+var
+  Cell: TGridValue;
+begin
+  Result := False;
+  if not (FEditingPrepared and Assigned(FCurrentUpdateRow)) then
+    Exit;
+  for Cell in FCurrentUpdateRow do begin
+    if Cell.Modified then
+      Exit(True);
+  end;
+end;
+
+function TDBQuery.HasPendingChanges: Boolean;
+var
+  Row: TGridRow;
+  Cell: TGridValue;
+begin
+  Result := False;
+  if not FEditingPrepared then
+    Exit;
+
+  for Row in FUpdateData do begin
+    if Row.Inserted then
+      Exit(True);
+    for Cell in Row do begin
+      if Cell.Modified then
+        Exit(True);
+    end;
+  end;
+end;
+
 function TDBQuery.Inserted: Boolean;
 begin
   // Check if current row was inserted and not yet posted to the server
@@ -11556,3 +11590,5 @@ end;
 
 
 end.
+
+
