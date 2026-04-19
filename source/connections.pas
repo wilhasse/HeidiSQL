@@ -434,13 +434,25 @@ procedure Tconnform.FormShow(Sender: TObject);
 var
   LastActiveSession: String;
   LastSessions: TStringList;
+  DisplayMonitor: TMonitor;
+  DisplayRect: TRect;
   PSess: PConnectionParameters;
   Node: PVirtualNode;
 begin
   Width := AppSettings.ReadIntDpiAware(asSessionManagerWindowWidth, Self);
   Height := AppSettings.ReadIntDpiAware(asSessionManagerWindowHeight, Self);
-  Left := AppSettings.ReadInt(asSessionManagerWindowLeft, '', Left);
-  Top := AppSettings.ReadInt(asSessionManagerWindowTop, '', Top);
+  if CSLOG_BUILD then begin
+    if Assigned(MainForm) and MainForm.HandleAllocated then
+      DisplayMonitor := Screen.MonitorFromWindow(MainForm.Handle)
+    else
+      DisplayMonitor := Screen.PrimaryMonitor;
+    DisplayRect := DisplayMonitor.WorkareaRect;
+    Left := DisplayRect.Left + ((DisplayRect.Right - DisplayRect.Left) - Width) div 2;
+    Top := DisplayRect.Top + ((DisplayRect.Bottom - DisplayRect.Top) - Height) div 2;
+  end else begin
+    Left := AppSettings.ReadInt(asSessionManagerWindowLeft, '', Left);
+    Top := AppSettings.ReadInt(asSessionManagerWindowTop, '', Top);
+  end;
   // Move to visible area if window was on a now plugged off monitor previously
   MakeFullyVisible;
   pnlLeft.Width := AppSettings.ReadIntDpiAware(asSessionManagerListWidth, Self);
