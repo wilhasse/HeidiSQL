@@ -64,4 +64,19 @@ if errorlevel 1 (
 )
 
 echo Signing completed successfully.
+
+if /I "%DEPLOY_UPDATE%"=="1" goto :deploy
+if /I "%DEPLOY_UPDATE%"=="true" goto :deploy
+if /I "%DEPLOY_UPDATE%"=="yes" goto :deploy
+echo Deploy is disabled by default. Set DEPLOY_UPDATE=1 to publish the update.
+exit /b 0
+
+:deploy
+echo Deploying update to server...
+powershell -ExecutionPolicy Bypass -File "%CD%\deploy-update.ps1" %DEPLOY_ARGS%
+if errorlevel 1 (
+  echo Deploy failed.
+  exit /b 1
+)
+echo Deploy completed successfully.
 exit /b 0
