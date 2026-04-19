@@ -312,7 +312,23 @@ begin
   else if SameText(MsgId, 'No managed sessions were loaded yet. Use More > Refresh sessions from API, or check the SQL monitor configuration.') then
     Result := 'Nenhuma sessao gerenciada foi carregada. Use Mais > Atualizar sessoes da API, ou verifique a configuracao do monitor SQL.'
   else if SameText(MsgId, 'Sessions in this build are managed by the CSLOG API catalog. Use stock HeidiSQL for custom connections.') then
-    Result := 'As sessoes desta versao sao gerenciadas pelo catalogo da API CSLOG. Use o HeidiSQL original para conexoes personalizadas.';
+    Result := 'As sessoes desta versao sao gerenciadas pelo catalogo da API CSLOG. Use o HeidiSQL original para conexoes personalizadas.'
+  else if SameText(MsgId, 'The central service returned an invalid update payload.') then
+    Result := 'O servico central retornou um payload invalido para atualizacao.'
+  else if SameText(MsgId, 'The central service did not return an update download URL.') then
+    Result := 'O servico central nao retornou a URL de download da atualizacao.'
+  else if SameText(MsgId, 'The downloaded HeidiSQL CSLOG update failed integrity validation.') then
+    Result := 'A atualizacao baixada do HeidiSQL CSLOG falhou na validacao de integridade.'
+  else if SameText(MsgId, 'No release notes were provided.') then
+    Result := 'Nenhuma nota de versao foi informada.'
+  else if SameText(MsgId, 'A mandatory HeidiSQL CSLOG update is available.') then
+    Result := 'Uma atualizacao obrigatoria do HeidiSQL CSLOG esta disponivel.' + CRLF + CRLF + 'Instalada: %s' + CRLF + 'Disponivel: %s' + CRLF + CRLF + '%s' + CRLF + CRLF + 'A atualizacao sera instalada agora.'
+  else if SameText(MsgId, 'A new HeidiSQL CSLOG version is available.') then
+    Result := 'Uma nova versao do HeidiSQL CSLOG esta disponivel.' + CRLF + CRLF + 'Instalada: %s' + CRLF + 'Disponivel: %s' + CRLF + CRLF + '%s' + CRLF + CRLF + 'Atualizar agora?'
+  else if SameText(MsgId, 'HeidiSQL CSLOG update was downloaded and will be installed now.') then
+    Result := 'A atualizacao do HeidiSQL CSLOG foi baixada e sera instalada agora. O aplicativo sera fechado.'
+  else if SameText(MsgId, 'Unable to install HeidiSQL CSLOG update: ') then
+    Result := 'Nao foi possivel instalar a atualizacao do HeidiSQL CSLOG: ';
 end;
 
 

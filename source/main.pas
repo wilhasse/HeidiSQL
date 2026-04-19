@@ -1446,7 +1446,7 @@ const
 implementation
 
 uses
-  About, printlist, dbstructures, dbstructures.mysql, UpdateCheck,
+  About, printlist, dbstructures, dbstructures.mysql, UpdateCheck, sqlupdate,
   column_selection, data_sorting, grideditlinks, ExportGrid, Vcl.Imaging.jpeg, Vcl.Imaging.GIFImg,
   reformatter;
 
@@ -2266,6 +2266,11 @@ begin
   ToolBarDonate.Visible := HasDonated(True) <> nbTrue;
 
   if not SqlMonitorEnsureStartupAuthentication then begin
+    Free;
+    Exit;
+  end;
+
+  if CSLOG_BUILD and SqlMonitorCheckAndApplyClientUpdate(Self, AppVersion, AppVerRevision, CUSTOM_BUILD_LABEL) then begin
     Free;
     Exit;
   end;
