@@ -2265,12 +2265,12 @@ begin
   FHasDonatedDatabaseCheck := nbUnset;
   ToolBarDonate.Visible := HasDonated(True) <> nbTrue;
 
-  if not SqlMonitorEnsureStartupAuthentication then begin
+  if CSLOG_BUILD and SqlMonitorCheckAndApplyClientUpdate(Self, AppVersion, AppVerRevision, CUSTOM_BUILD_LABEL) then begin
     Free;
     Exit;
   end;
 
-  if CSLOG_BUILD and SqlMonitorCheckAndApplyClientUpdate(Self, AppVersion, AppVerRevision, CUSTOM_BUILD_LABEL) then begin
+  if not SqlMonitorEnsureStartupAuthentication then begin
     Free;
     Exit;
   end;

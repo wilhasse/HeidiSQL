@@ -12,10 +12,13 @@ implementation
 
 uses
   System.SysUtils, System.JSON, System.StrUtils, System.Hash, System.Math, Winapi.Windows, Winapi.ShellAPI,
-  Vcl.Forms, Vcl.Dialogs, Vcl.Controls,
+  Vcl.Forms, Vcl.Dialogs, Vcl.Controls, Vcl.StdCtrls,
   apphelpers, sqlmonitor;
 
 {$I const.inc}
+
+const
+  UPDATE_STATUS_OK_VISIBLE_MS = 1800;
 
 type
   TClientUpdateInfo = record
@@ -31,6 +34,70 @@ type
     Size: Int64;
     ReleaseNotes: String;
   end;
+
+function ShowUpdateStatusDialog(const StatusText: String): TForm;
+var
+  StatusLabel: TLabel;
+begin
+  Result := TForm.CreateNew(Application);
+  Result.BorderStyle := bsDialog;
+  Result.BorderIcons := [];
+  Result.Caption := SqlMonitorTranslate('HeidiSQL CSLOG update');
+  Result.Position := poScreenCenter;
+  Result.ClientWidth := 430;
+  Result.ClientHeight := 92;
+
+  StatusLabel := TLabel.Create(Result);
+  StatusLabel.Name := 'lblStatus';
+  StatusLabel.Parent := Result;
+  StatusLabel.Left := 18;
+  StatusLabel.Top := 18;
+  StatusLabel.Width := Result.ClientWidth - 36;
+  StatusLabel.Height := 52;
+  StatusLabel.AutoSize := False;
+  StatusLabel.WordWrap := True;
+  StatusLabel.Caption := StatusText;
+
+  Result.Show;
+  Result.Update;
+  Application.ProcessMessages;
+end;
+
+
+procedure SetUpdateStatusDialogText(StatusForm: TForm; const StatusText: String);
+var
+  StatusLabel: TComponent;
+begin
+  if not Assigned(StatusForm) then
+    Exit;
+  StatusLabel := StatusForm.FindComponent('lblStatus');
+  if StatusLabel is TLabel then
+    TLabel(StatusLabel).Caption := StatusText;
+  StatusForm.Update;
+  Application.ProcessMessages;
+end;
+
+
+procedure CloseUpdateStatusDialog(var StatusForm: TForm);
+begin
+  if not Assigned(StatusForm) then
+    Exit;
+  StatusForm.Close;
+  FreeAndNil(StatusForm);
+  Application.ProcessMessages;
+end;
+
+
+procedure SleepWithMessagePump(DurationMs: Cardinal);
+var
+  Deadline: UInt64;
+begin
+  Deadline := GetTickCount64 + DurationMs;
+  while GetTickCount64 < Deadline do begin
+    Application.ProcessMessages;
+    Sleep(50);
+  end;
+end;
 
 function GetClientHostName: String;
 var
@@ -347,30 +414,40 @@ function SqlMonitorCheckAndApplyClientUpdate(AOwner: TComponent; const CurrentVe
 var
   UpdateInfo: TClientUpdateInfo;
   UpdateDir, PackagePath, ScriptPath: String;
+  StatusForm: TForm;
 begin
   Result := False;
-  if (not CSLOG_BUILD) or (not SqlMonitorCentralAuthEnabled) or (not TSqlMonitorClient.IsConfigured) then
-    Exit;
-  if not SqlMonitorEnsureCentralAuthSession('') then
+  if (not CSLOG_BUILD) or (not TSqlMonitorClient.IsConfigured) then
     Exit;
 
+  StatusForm := nil;
   try
+    StatusForm := ShowUpdateStatusDialog(SqlMonitorTranslate('Checking for HeidiSQL CSLOG updates...'));
     UpdateInfo := FetchUpdateInfo(AOwner, CurrentVersion, CurrentRevision, CurrentBuildLabel);
-    if not UpdateInfo.UpdateAvailable then
+    if not UpdateInfo.UpdateAvailable then begin
+      SetUpdateStatusDialogText(StatusForm, SqlMonitorTranslate('HeidiSQL CSLOG is up to date.'));
+      SleepWithMessagePump(UPDATE_STATUS_OK_VISIBLE_MS);
+      CloseUpdateStatusDialog(StatusForm);
       Exit;
+    end;
+
+    CloseUpdateStatusDialog(StatusForm);
     if not ConfirmUpdate(UpdateInfo, CurrentVersion) then
       Exit;
 
+    StatusForm := ShowUpdateStatusDialog(SqlMonitorTranslate('Downloading HeidiSQL CSLOG update...'));
     Screen.Cursor := crHourGlass;
     try
       UpdateDir := IncludeTrailingPathDelimiter(GetTempDir) + 'HeidiSQL-CSLOG-update-' +
         StringReplace(UpdateInfo.Version, '.', '-', [rfReplaceAll]);
       PackagePath := DownloadUpdatePackage(AOwner, UpdateInfo, UpdateDir);
+      SetUpdateStatusDialogText(StatusForm, SqlMonitorTranslate('Preparing HeidiSQL CSLOG update installation...'));
       ScriptPath := WriteUpdaterScript(UpdateInfo, PackagePath, UpdateDir);
     finally
       Screen.Cursor := crDefault;
     end;
 
+    CloseUpdateStatusDialog(StatusForm);
     MessageDialog(SqlMonitorTranslate('HeidiSQL CSLOG update was downloaded and will be installed now.'),
       mtInformation, [mbOK]);
     LaunchUpdaterScript(ScriptPath);
@@ -378,11 +455,13 @@ begin
     Result := True;
   except
     on E: Exception do begin
+      CloseUpdateStatusDialog(StatusForm);
       MessageDialog(SqlMonitorTranslate('Unable to install HeidiSQL CSLOG update: ') + E.Message,
         mtWarning, [mbOK]);
       Result := False;
     end;
   end;
+  CloseUpdateStatusDialog(StatusForm);
 end;
 
 end.

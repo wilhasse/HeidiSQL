@@ -313,6 +313,16 @@ begin
     Result := 'Nenhuma sessao gerenciada foi carregada. Use Mais > Atualizar sessoes da API, ou verifique a configuracao do monitor SQL.'
   else if SameText(MsgId, 'Sessions in this build are managed by the CSLOG API catalog. Use stock HeidiSQL for custom connections.') then
     Result := 'As sessoes desta versao sao gerenciadas pelo catalogo da API CSLOG. Use o HeidiSQL original para conexoes personalizadas.'
+  else if SameText(MsgId, 'HeidiSQL CSLOG update') then
+    Result := 'Atualizacao HeidiSQL CSLOG'
+  else if SameText(MsgId, 'Checking for HeidiSQL CSLOG updates...') then
+    Result := 'Verificando atualizacoes do HeidiSQL CSLOG...'
+  else if SameText(MsgId, 'HeidiSQL CSLOG is up to date.') then
+    Result := 'HeidiSQL CSLOG ja esta atualizado.'
+  else if SameText(MsgId, 'Downloading HeidiSQL CSLOG update...') then
+    Result := 'Baixando atualizacao do HeidiSQL CSLOG...'
+  else if SameText(MsgId, 'Preparing HeidiSQL CSLOG update installation...') then
+    Result := 'Preparando instalacao da atualizacao do HeidiSQL CSLOG...'
   else if SameText(MsgId, 'The central service returned an invalid update payload.') then
     Result := 'O servico central retornou um payload invalido para atualizacao.'
   else if SameText(MsgId, 'The central service did not return an update download URL.') then
