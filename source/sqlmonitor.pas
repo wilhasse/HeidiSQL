@@ -505,6 +505,28 @@ begin
 end;
 
 
+
+procedure CenterFormOnActiveMonitor(AForm: TCustomForm);
+var
+  Monitor: Vcl.Forms.TMonitor;
+  WorkArea: TRect;
+begin
+  if Assigned(MainForm) and MainForm.HandleAllocated then
+    Monitor := Screen.MonitorFromWindow(MainForm.Handle, mdNearest)
+  else if Application.Handle <> 0 then
+    Monitor := Screen.MonitorFromWindow(Application.Handle, mdNearest)
+  else
+    Monitor := Screen.PrimaryMonitor;
+
+  if not Assigned(Monitor) then
+    Exit;
+
+  WorkArea := Monitor.WorkareaRect;
+  AForm.Left := WorkArea.Left + ((WorkArea.Right - WorkArea.Left) - AForm.Width) div 2;
+  AForm.Top := WorkArea.Top + ((WorkArea.Bottom - WorkArea.Top) - AForm.Height) div 2;
+end;
+
+
 function GetConnectionTargetPort(Connection: TDBConnection): Integer;
 begin
   Result := 0;
@@ -898,7 +920,7 @@ begin
   try
     Dialog.Caption := SqlMonitorTranslate('Centralized AD authentication');
     Dialog.BorderStyle := bsDialog;
-    Dialog.Position := poMainFormCenter;
+    Dialog.Position := poDesigned;
     Dialog.Width := 470;
     Dialog.Height := 250;
     Dialog.Constraints.MinWidth := 430;
@@ -967,6 +989,7 @@ begin
       else
         Dialog.ActiveControl := PasswordEdit;
 
+      CenterFormOnActiveMonitor(Dialog);
       Result := Dialog.ShowModal = mrOk;
     finally
       DialogState.Free;
