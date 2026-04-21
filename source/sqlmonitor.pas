@@ -89,6 +89,7 @@ type
     function BuildAuthLoginPayload(const Username, Password: String): String;
     function BuildCredentialResolvePayload(Connection: TDBConnection): String;
     function BuildSessionPayload(Connection: TDBConnection; const DatabaseName: String): String;
+    function BuildTicketLookupPayload(Connection: TDBConnection; const TicketNumber: String): String;
     function BuildTargetJson(Connection: TDBConnection; const DatabaseName: String): TJSONObject;
     function BuildExecutionPayload(Connection: TDBConnection; const SQL, TicketNumber: String; DurationMs: Cardinal; RowsAffected, RowsFound: Int64; Success: Boolean; const ErrorMessage: String): String;
     function BuildRequestPayload(Connection: TDBConnection; StatementSql: TStrings; const TicketNumber: String): String;
@@ -113,6 +114,7 @@ type
     function CreateRequest(Connection: TDBConnection; StatementSql: TStrings; const TicketNumber: String=''): TSqlMonitorBatchResponse;
     function GetRequestStatus(const RequestId: String): TSqlMonitorBatchResponse;
     function LoginCentralAuth(const Username, Password: String; out ActorId, AuthToken: String; out ExpiresAt: TDateTime): Boolean;
+    function LookupTicket(Connection: TDBConnection; const TicketNumber: String; out TicketTitle, TicketStatus: String): Boolean;
     function RegisterSession(Connection: TDBConnection; const DatabaseName: String): Boolean;
     function ResolveDbCredentials(Connection: TDBConnection): TSqlMonitorCredentialResponse;
     function WaitForDecision(const RequestId: String; out Response: TSqlMonitorBatchResponse): Boolean;
@@ -153,6 +155,29 @@ type
     procedure HandleCancel(Sender: TObject);
   end;
 
+  TSqlMonitorTicketInfo = record
+    Number: String;
+    Title: String;
+    Status: String;
+  end;
+
+  TTicketLookupDialogState = class(TObject)
+  private
+    FConnection: TDBConnection;
+    FTicketEdit: TEdit;
+    FInfoLabel: TLabel;
+    FLookupButton: TButton;
+    FLoadedInfo: TSqlMonitorTicketInfo;
+    procedure SetInfoMessage(const Msg: String; Color: TColor);
+    function CurrentTicketNumber: String;
+  public
+    constructor Create(AConnection: TDBConnection; ATicketEdit: TEdit; AInfoLabel: TLabel;
+      ALookupButton: TButton; const InitialInfo: TSqlMonitorTicketInfo; InitialInfoAvailable: Boolean);
+    procedure TicketEditChange(Sender: TObject);
+    procedure LookupButtonClick(Sender: TObject);
+    function LoadTicketInfo(ShowErrors: Boolean): Boolean;
+    property LoadedInfo: TSqlMonitorTicketInfo read FLoadedInfo;
+  end;
   TSqlMonitorCentralAuthDialogState = class(TObject)
   private
     FDialog: TForm;
@@ -187,7 +212,7 @@ var
   CachedCentralAuthExpiresAt: TDateTime;
   CachedCentralAuthToken: String;
   CachedCentralAuthUsername: String;
-  CachedTicketNumbers: TDictionary<String, String>;
+  CachedTicketInfo: TDictionary<String, TSqlMonitorTicketInfo>;
 
 function SqlMonitorTranslate(const MsgId: String): String;
 var
@@ -245,6 +270,18 @@ begin
     Result := 'Confirmar escrita SQL'
   else if SameText(MsgId, 'Ticket number') then
     Result := 'Numero do chamado'
+  else if SameText(MsgId, 'Load ticket title') then
+    Result := 'Carregar chamado'
+  else if SameText(MsgId, 'Type a ticket number and load the title to confirm it.') then
+    Result := 'Informe o numero do chamado e carregue o titulo para confirmar.'
+  else if SameText(MsgId, 'Click Load ticket title to confirm this ticket.') then
+    Result := 'Clique em Carregar chamado para confirmar este ticket.'
+  else if SameText(MsgId, 'Loading ticket title ...') then
+    Result := 'Carregando titulo do chamado ...'
+  else if SameText(MsgId, 'Ticket lookup failed: ') then
+    Result := 'Falha ao consultar chamado: '
+  else if SameText(MsgId, 'Ticket %s: %s') then
+    Result := 'Chamado %s: %s'
   else if SameText(MsgId, 'Confirm this SQL write before it is executed. You may also inform a ticket number.') then
     Result := 'Confirme esta escrita SQL antes da execucao. Se desejar, informe tambem o numero do chamado.'
   else if SameText(MsgId, 'This write will wait for centralized approval after you confirm the ticket number.') then
@@ -576,17 +613,55 @@ begin
 end;
 
 
-function GetCachedTicketNumber(Connection: TDBConnection): String;
+function EmptyTicketInfo: TSqlMonitorTicketInfo;
+begin
+  Result.Number := '';
+  Result.Title := '';
+  Result.Status := '';
+end;
+
+
+function GetCachedTicketInfo(Connection: TDBConnection; out TicketInfo: TSqlMonitorTicketInfo): Boolean;
 var
   Key: String;
 begin
-  Result := '';
+  TicketInfo := EmptyTicketInfo;
+  Result := False;
   Key := BuildTicketCacheKey(Connection);
   if Key.IsEmpty then
     Exit;
   System.TMonitor.Enter(TicketCacheLock);
   try
-    CachedTicketNumbers.TryGetValue(Key, Result);
+    Result := CachedTicketInfo.TryGetValue(Key, TicketInfo);
+  finally
+    System.TMonitor.Exit(TicketCacheLock);
+  end;
+end;
+
+
+function GetCachedTicketNumber(Connection: TDBConnection): String;
+var
+  TicketInfo: TSqlMonitorTicketInfo;
+begin
+  Result := '';
+  if GetCachedTicketInfo(Connection, TicketInfo) then
+    Result := TicketInfo.Number;
+end;
+
+
+procedure CacheTicketInfo(Connection: TDBConnection; const TicketInfo: TSqlMonitorTicketInfo);
+var
+  Key: String;
+begin
+  Key := BuildTicketCacheKey(Connection);
+  if Key.IsEmpty then
+    Exit;
+  System.TMonitor.Enter(TicketCacheLock);
+  try
+    if TicketInfo.Number.IsEmpty then
+      CachedTicketInfo.Remove(Key)
+    else
+      CachedTicketInfo.AddOrSetValue(Key, TicketInfo);
   finally
     System.TMonitor.Exit(TicketCacheLock);
   end;
@@ -595,20 +670,11 @@ end;
 
 procedure CacheTicketNumber(Connection: TDBConnection; const TicketNumber: String);
 var
-  Key: String;
+  TicketInfo: TSqlMonitorTicketInfo;
 begin
-  Key := BuildTicketCacheKey(Connection);
-  if Key.IsEmpty then
-    Exit;
-  System.TMonitor.Enter(TicketCacheLock);
-  try
-    if TicketNumber.IsEmpty then
-      CachedTicketNumbers.Remove(Key)
-    else
-      CachedTicketNumbers.AddOrSetValue(Key, TicketNumber);
-  finally
-    System.TMonitor.Exit(TicketCacheLock);
-  end;
+  TicketInfo := EmptyTicketInfo;
+  TicketInfo.Number := Trim(TicketNumber);
+  CacheTicketInfo(Connection, TicketInfo);
 end;
 
 
@@ -616,10 +682,108 @@ procedure ClearCachedTicketNumbers;
 begin
   System.TMonitor.Enter(TicketCacheLock);
   try
-    CachedTicketNumbers.Clear;
+    CachedTicketInfo.Clear;
   finally
     System.TMonitor.Exit(TicketCacheLock);
   end;
+end;
+
+constructor TTicketLookupDialogState.Create(AConnection: TDBConnection; ATicketEdit: TEdit; AInfoLabel: TLabel;
+  ALookupButton: TButton; const InitialInfo: TSqlMonitorTicketInfo; InitialInfoAvailable: Boolean);
+begin
+  inherited Create;
+  FConnection := AConnection;
+  FTicketEdit := ATicketEdit;
+  FInfoLabel := AInfoLabel;
+  FLookupButton := ALookupButton;
+  FLoadedInfo := EmptyTicketInfo;
+  if InitialInfoAvailable then
+    FLoadedInfo := InitialInfo;
+  FTicketEdit.OnChange := TicketEditChange;
+  FLookupButton.OnClick := LookupButtonClick;
+  TicketEditChange(FTicketEdit);
+end;
+
+
+function TTicketLookupDialogState.CurrentTicketNumber: String;
+begin
+  Result := Trim(FTicketEdit.Text);
+end;
+
+
+procedure TTicketLookupDialogState.SetInfoMessage(const Msg: String; Color: TColor);
+begin
+  FInfoLabel.Font.Color := Color;
+  FInfoLabel.Caption := Msg;
+  FInfoLabel.Update;
+end;
+
+
+procedure TTicketLookupDialogState.TicketEditChange(Sender: TObject);
+var
+  TicketNumber, MessageText: String;
+begin
+  TicketNumber := CurrentTicketNumber;
+  if TicketNumber.IsEmpty then begin
+    SetInfoMessage(SqlMonitorTranslate('Type a ticket number and load the title to confirm it.'), clGrayText);
+    Exit;
+  end;
+
+  if SameText(TicketNumber, FLoadedInfo.Number) and (not FLoadedInfo.Title.IsEmpty) then begin
+    MessageText := Format(SqlMonitorTranslate('Ticket %s: %s'), [FLoadedInfo.Number, FLoadedInfo.Title]);
+    if not FLoadedInfo.Status.IsEmpty then
+      MessageText := MessageText + ' (' + FLoadedInfo.Status + ')';
+    SetInfoMessage(MessageText, clWindowText);
+  end else begin
+    SetInfoMessage(SqlMonitorTranslate('Click Load ticket title to confirm this ticket.'), clGrayText);
+  end;
+end;
+
+
+procedure TTicketLookupDialogState.LookupButtonClick(Sender: TObject);
+begin
+  LoadTicketInfo(True);
+end;
+
+
+function TTicketLookupDialogState.LoadTicketInfo(ShowErrors: Boolean): Boolean;
+var
+  Client: TSqlMonitorClient;
+  TicketNumber, TicketTitle, TicketStatus, MessageText: String;
+begin
+  Result := False;
+  TicketNumber := CurrentTicketNumber;
+  if TicketNumber.IsEmpty then begin
+    SetInfoMessage(SqlMonitorTranslate('Type a ticket number and load the title to confirm it.'), clRed);
+    Exit;
+  end;
+
+  SetInfoMessage(SqlMonitorTranslate('Loading ticket title ...'), clGrayText);
+  Client := TSqlMonitorClient.Create(FInfoLabel);
+  try
+    try
+      Result := Client.LookupTicket(FConnection, TicketNumber, TicketTitle, TicketStatus);
+    except
+      on E: Exception do begin
+        if ShowErrors then
+          SetInfoMessage(SqlMonitorTranslate('Ticket lookup failed: ') + E.Message, clRed)
+        else
+          SetInfoMessage(SqlMonitorTranslate('Click Load ticket title to confirm this ticket.'), clGrayText);
+        Exit(False);
+      end;
+    end;
+  finally
+    Client.Free;
+  end;
+
+  FLoadedInfo.Number := TicketNumber;
+  FLoadedInfo.Title := TicketTitle;
+  FLoadedInfo.Status := TicketStatus;
+  CacheTicketInfo(FConnection, FLoadedInfo);
+  MessageText := Format(SqlMonitorTranslate('Ticket %s: %s'), [FLoadedInfo.Number, FLoadedInfo.Title]);
+  if not FLoadedInfo.Status.IsEmpty then
+    MessageText := MessageText + ' (' + FLoadedInfo.Status + ')';
+  SetInfoMessage(MessageText, clWindowText);
 end;
 
 function ReadAppSettingSafely(SettingIndex: TAppSettingIndex): String;
@@ -1200,24 +1364,28 @@ end;
 function PromptForTicketNumber(Connection: TDBConnection; StatementSql: TStrings; HasGuardedWrites: Boolean; out TicketNumber: String): Boolean;
 var
   Dialog: TForm;
-  IntroLabel, TicketLabel: TLabel;
+  IntroLabel, TicketLabel, TicketInfoLabel: TLabel;
   TicketEdit: TEdit;
   SummaryMemo: TMemo;
-  ConfirmButton, CancelButton: TButton;
+  ConfirmButton, CancelButton, LookupTicketButton: TButton;
+  TicketController: TTicketLookupDialogState;
+  CachedInfo, LoadedInfo: TSqlMonitorTicketInfo;
+  HasCachedInfo: Boolean;
   SummaryText, PreviewText: String;
   IntroRect: TRect;
 begin
   Result := False;
   TicketNumber := '';
+  TicketController := nil;
   Dialog := TForm.CreateNew(MainForm);
   try
     Dialog.Caption := SqlMonitorTranslate('Confirm SQL write');
     Dialog.BorderStyle := bsSizeable;
     Dialog.Position := poMainFormCenter;
     Dialog.Width := 720;
-    Dialog.Height := 360;
+    Dialog.Height := 390;
     Dialog.Constraints.MinWidth := 560;
-    Dialog.Constraints.MinHeight := 300;
+    Dialog.Constraints.MinHeight := 330;
     Dialog.BorderIcons := [biSystemMenu, biMaximize];
 
     IntroLabel := TLabel.Create(Dialog);
@@ -1238,19 +1406,43 @@ begin
     TicketLabel.Top := IntroLabel.Top + IntroLabel.Height + 12;
     TicketLabel.Caption := SqlMonitorTranslate('Ticket number');
 
+    LookupTicketButton := TButton.Create(Dialog);
+    LookupTicketButton.Parent := Dialog;
+    LookupTicketButton.Width := 132;
+    LookupTicketButton.Height := 24;
+    LookupTicketButton.Left := Dialog.ClientWidth - 16 - LookupTicketButton.Width;
+    LookupTicketButton.Top := TicketLabel.Top + TicketLabel.Height + 6;
+    LookupTicketButton.Anchors := [akTop, akRight];
+    LookupTicketButton.Caption := SqlMonitorTranslate('Load ticket title');
+
     TicketEdit := TEdit.Create(Dialog);
     TicketEdit.Parent := Dialog;
     TicketEdit.Left := 16;
-    TicketEdit.Top := TicketLabel.Top + TicketLabel.Height + 6;
-    TicketEdit.Width := Dialog.ClientWidth - 32;
+    TicketEdit.Top := LookupTicketButton.Top;
+    TicketEdit.Width := LookupTicketButton.Left - TicketEdit.Left - 8;
     TicketEdit.Anchors := [akLeft, akTop, akRight];
-    TicketEdit.Text := GetCachedTicketNumber(Connection);
+    HasCachedInfo := GetCachedTicketInfo(Connection, CachedInfo);
+    if HasCachedInfo then
+      TicketEdit.Text := CachedInfo.Number;
     TicketLabel.FocusControl := TicketEdit;
+
+    TicketInfoLabel := TLabel.Create(Dialog);
+    TicketInfoLabel.Parent := Dialog;
+    TicketInfoLabel.Left := 16;
+    TicketInfoLabel.Top := TicketEdit.Top + TicketEdit.Height + 6;
+    TicketInfoLabel.Width := Dialog.ClientWidth - 32;
+    TicketInfoLabel.Height := 34;
+    TicketInfoLabel.Anchors := [akLeft, akTop, akRight];
+    TicketInfoLabel.AutoSize := False;
+    TicketInfoLabel.WordWrap := True;
+
+    TicketController := TTicketLookupDialogState.Create(Connection, TicketEdit, TicketInfoLabel,
+      LookupTicketButton, CachedInfo, HasCachedInfo);
 
     SummaryMemo := TMemo.Create(Dialog);
     SummaryMemo.Parent := Dialog;
     SummaryMemo.Left := 16;
-    SummaryMemo.Top := TicketEdit.Top + TicketEdit.Height + 12;
+    SummaryMemo.Top := TicketInfoLabel.Top + TicketInfoLabel.Height + 12;
     SummaryMemo.Width := Dialog.ClientWidth - 32;
     SummaryMemo.Height := Dialog.ClientHeight - SummaryMemo.Top - 56;
     SummaryMemo.Anchors := [akLeft, akTop, akRight, akBottom];
@@ -1293,13 +1485,17 @@ begin
     if Dialog.ShowModal <> mrOk then
       Exit(False);
     TicketNumber := Trim(TicketEdit.Text);
-    CacheTicketNumber(Connection, TicketNumber);
+    LoadedInfo := TicketController.LoadedInfo;
+    if SameText(LoadedInfo.Number, TicketNumber) and (not LoadedInfo.Title.IsEmpty) then
+      CacheTicketInfo(Connection, LoadedInfo)
+    else
+      CacheTicketNumber(Connection, TicketNumber);
     Result := True;
   finally
+    TicketController.Free;
     Dialog.Free;
   end;
 end;
-
 
 function SqlMonitorPrepareExecution(Connection: TDBConnection; StatementSql: TStrings; out Context: TSqlMonitorExecutionContext): Boolean;
 var
@@ -1785,6 +1981,24 @@ begin
 end;
 
 
+function TSqlMonitorClient.BuildTicketLookupPayload(Connection: TDBConnection; const TicketNumber: String): String;
+var
+  RootJson: TJSONObject;
+begin
+  RootJson := TJSONObject.Create;
+  try
+    RootJson.AddPair('client_app', APPNAME);
+    RootJson.AddPair('client_version', GetClientVersion);
+    RootJson.AddPair('actor_id', GetClientActorId);
+    RootJson.AddPair('client_host', GetClientHostName);
+    RootJson.AddPair('ticket_number', TicketNumber);
+    RootJson.AddPair('target', BuildTargetJson(Connection, ''));
+    Result := RootJson.ToJSON;
+  finally
+    RootJson.Free;
+  end;
+end;
+
 function TSqlMonitorClient.BuildExecutionPayload(Connection: TDBConnection; const SQL, TicketNumber: String; DurationMs: Cardinal; RowsAffected, RowsFound: Int64; Success: Boolean; const ErrorMessage: String): String;
 var
   RootJson, StatementJson: TJSONObject;
@@ -1925,6 +2139,32 @@ begin
   end;
 end;
 
+
+function TSqlMonitorClient.LookupTicket(Connection: TDBConnection; const TicketNumber: String; out TicketTitle, TicketStatus: String): Boolean;
+var
+  ResponseText: String;
+  RootValue: TJSONValue;
+  RootObject: TJSONObject;
+begin
+  Result := False;
+  TicketTitle := '';
+  TicketStatus := '';
+  SendJsonRequest(BaseUrl + '/v1/tickets/lookup', 'POST', BuildTicketLookupPayload(Connection, TicketNumber), ResponseText, SessionTimeoutSeconds);
+  RootValue := TJSONObject.ParseJSONValue(ResponseText);
+  if not (RootValue is TJSONObject) then begin
+    RootValue.Free;
+    raise ESqlMonitorError.Create(SqlMonitorTranslate('SQL monitor returned an invalid JSON payload.'));
+  end;
+
+  RootObject := RootValue as TJSONObject;
+  try
+    TicketTitle := GetJsonString(RootObject, 'title');
+    TicketStatus := GetJsonString(RootObject, 'status');
+    Result := True;
+  finally
+    RootValue.Free;
+  end;
+end;
 
 function TSqlMonitorClient.ResolveDbCredentials(Connection: TDBConnection): TSqlMonitorCredentialResponse;
 var
@@ -2379,10 +2619,10 @@ initialization
   SqlMonitorConfigLock := TObject.Create;
   SqlMonitorAuthLock := TObject.Create;
   TicketCacheLock := TObject.Create;
-  CachedTicketNumbers := TDictionary<String, String>.Create;
+  CachedTicketInfo := TDictionary<String, TSqlMonitorTicketInfo>.Create;
 
 finalization
-  CachedTicketNumbers.Free;
+  CachedTicketInfo.Free;
   TicketCacheLock.Free;
   SessionRegistrations.Free;
   SessionRegistrationsLock.Free;
