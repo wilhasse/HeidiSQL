@@ -53,6 +53,14 @@ if errorlevel 1 (
   exit /b 1
 )
 
+if exist "%SCRIPT_DIR%out\plugins64" (
+  powershell -NoProfile -ExecutionPolicy Bypass -Command "$targetPlugins=Join-Path '%TARGET_DIR%' 'plugins'; if(-not (Test-Path $targetPlugins)){ New-Item -ItemType Directory -Path $targetPlugins -Force | Out-Null }; Copy-Item -Path (Join-Path '%SCRIPT_DIR%' 'out\plugins64\*') -Destination $targetPlugins -Force"
+  if errorlevel 1 (
+    echo Failed to copy MySQL authentication plugins.
+    exit /b 1
+  )
+)
+
 if exist "%SCRIPT_DIR%out\locale" (
   powershell -NoProfile -ExecutionPolicy Bypass -Command "Copy-Item -Path (Join-Path '%SCRIPT_DIR%' 'out\locale') -Destination '%TARGET_DIR%' -Recurse -Force"
   if errorlevel 1 (
