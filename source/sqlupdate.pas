@@ -382,7 +382,7 @@ var
   ShellResult: HINST;
 begin
   Params := '-NoProfile -ExecutionPolicy Bypass -File ' + AnsiQuotedStr(ScriptPath, '"');
-  ShellResult := ShellExecute(0, 'runas', 'powershell.exe', PChar(Params), nil, SW_SHOWNORMAL);
+  ShellResult := ShellExecute(0, 'runas', 'powershell.exe', PChar(Params), nil, SW_HIDE);
   if NativeInt(ShellResult) <= 32 then
     raise Exception.CreateFmt('Unable to start elevated updater. ShellExecute returned %d.', [NativeInt(ShellResult)]);
 end;
