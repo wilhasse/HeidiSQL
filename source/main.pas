@@ -5752,24 +5752,43 @@ var
   Grid: TVirtualStringTree;
   Results: TDBQuery;
   RowNum: PInt64;
-  Node, FocNode: PVirtualNode;
+  Node, NextNode: PVirtualNode;
+  RowWasInserted, RowHadChanges, CancelledAny: Boolean;
 begin
-  // Cancel INSERT or UPDATE mode
+  // Cancel all pending INSERT or UPDATE changes in the active grid.
   Grid := ActiveGrid;
-  Node := Grid.FocusedNode;
-  if Assigned(Node) then begin
-    Results := GridResult(Grid);
-    RowNum := Grid.GetNodeData(Node);
-    Results.RecNo := RowNum^;
-    Results.DiscardModifications;
-    if Results.Inserted then begin
-      FocNode := Grid.GetPreviousSibling(Node);
-      Grid.DeleteNode(Node);
-      SelectNode(Grid, FocNode);
-    end else
-      Grid.InvalidateNode(Node);
-    ValidateControls(Sender);
+  if not Assigned(Grid) then
+    Exit;
+  Results := GridResult(Grid);
+  if not Assigned(Results) then
+    Exit;
+
+  CancelledAny := False;
+  Grid.BeginUpdate;
+  try
+    Node := GetNextNode(Grid, nil);
+    while Assigned(Node) do begin
+      NextNode := GetNextNode(Grid, Node);
+      RowNum := Grid.GetNodeData(Node);
+      Results.RecNo := RowNum^;
+      RowWasInserted := Results.Inserted;
+      RowHadChanges := RowWasInserted or Results.CurrentRowModified;
+      if RowHadChanges then begin
+        Results.DiscardModifications;
+        if RowWasInserted then
+          Grid.DeleteNode(Node)
+        else
+          Grid.InvalidateNode(Node);
+        CancelledAny := True;
+      end;
+      Node := NextNode;
+    end;
+  finally
+    Grid.EndUpdate;
   end;
+  if CancelledAny then
+    DisplayRowCountStats(Grid);
+  ValidateControls(Sender);
 end;
 
 
