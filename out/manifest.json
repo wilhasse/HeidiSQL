@@ -2,11 +2,11 @@
     "mandatory":  false,
     "filename":  "heidisql64.exe",
     "enabled":  true,
-    "version":  "12.16.0.7260",
+    "version":  "12.16.0.7261",
     "release_notes":  "Correcoes da versao CSLOG.",
-    "commit":  "9632da73",
+    "commit":  "9b57af54",
     "channel":  "stable",
-    "revision":  7260,
-    "sha256":  "0823222e99b1e09e1ceb4841d2d78369501f26effbf11e2f24db48176e6cf62c",
+    "revision":  7261,
+    "sha256":  "6b4203142e0be381521636ab7588454415ebc3e05bc9ca86b59d352dfe45c0cd",
     "package_type":  "exe"
 }

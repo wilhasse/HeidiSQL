@@ -258,6 +258,8 @@ begin
     Result := 'Monitor SQL bloqueou a execucao: '
   else if SameText(MsgId, 'Central SQL approval blocked execution') then
     Result := 'Aprovacao SQL centralizada bloqueou a execucao'
+  else if SameText(MsgId, 'Writes are blocked for Espelho replica databases.') then
+    Result := 'Escritas estao bloqueadas para bancos replica Espelho'
   else if SameText(MsgId, 'Central SQL logging is unavailable. Continuing without centralized logging.') then
     Result := 'O log SQL centralizado esta indisponivel. Continuando sem log centralizado.'
   else if SameText(MsgId, 'SQL monitor logging warning: ') then
@@ -1336,6 +1338,31 @@ begin
 end;
 
 
+function ConnectionNameContains(Connection: TDBConnection; const Token: String): Boolean;
+var
+  Haystack: String;
+begin
+  Result := False;
+  if (Connection = nil) or Token.IsEmpty then
+    Exit;
+  Haystack := Connection.Parameters.SessionPath + ' ' + Connection.Parameters.SessionName + ' ' +
+    Connection.Parameters.AllDatabasesStr + ' ' + Connection.Parameters.Comment + ' ' + Connection.Database;
+  Result := Pos(UpperCase(Token), UpperCase(Haystack)) > 0;
+end;
+
+
+function SqlMonitorIsTestTarget(Connection: TDBConnection): Boolean;
+begin
+  Result := ConnectionNameContains(Connection, 'Teste');
+end;
+
+
+function SqlMonitorIsReplicaTarget(Connection: TDBConnection): Boolean;
+begin
+  Result := ConnectionNameContains(Connection, 'Espelho');
+end;
+
+
 function BuildStatementPreview(StatementSql: TStrings): String;
 var
   i, PreviewCount: Integer;
@@ -1506,8 +1533,6 @@ var
 begin
   Result := True;
   Context := nil;
-  if not SqlMonitorShouldHandle(Connection) then
-    Exit;
   if (StatementSql = nil) or (StatementSql.Count = 0) then
     Exit;
 
@@ -1515,7 +1540,19 @@ begin
   HasWrites := StatementListHasWrites(StatementSql);
   TicketNumber := '';
 
-  if HasWrites then begin
+  if CSLOG_BUILD and HasWrites and SqlMonitorIsReplicaTarget(Connection) then begin
+    DecisionMsg := SqlMonitorTranslate('Writes are blocked for Espelho replica databases.');
+    if Assigned(MainForm) then
+      MainForm.LogSQL(SqlMonitorTranslate('SQL monitor blocked execution: ') + DecisionMsg, lcError, Connection);
+    SqlMonitorShowError(SqlMonitorTranslate('Central SQL approval blocked execution'), DecisionMsg);
+    Result := False;
+    Exit;
+  end;
+
+  if not SqlMonitorShouldHandle(Connection) then
+    Exit;
+
+  if HasWrites and (not SqlMonitorIsTestTarget(Connection)) then begin
     if not PromptForTicketNumber(Connection, StatementSql, HasGuardedWrites, TicketNumber) then begin
       Result := False;
       Exit;
