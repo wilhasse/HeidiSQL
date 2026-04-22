@@ -396,16 +396,15 @@ begin
   if Notes.IsEmpty then
     Notes := SqlMonitorTranslate('No release notes were provided.');
 
-  if UpdateInfo.Mandatory then begin
+  if UpdateInfo.Mandatory then
     MessageText := Format(SqlMonitorTranslate('A mandatory HeidiSQL CSLOG update is available.'),
+      [CurrentVersion, UpdateInfo.Version, Notes])
+  else
+    MessageText := Format(SqlMonitorTranslate('A new HeidiSQL CSLOG version is available.'),
       [CurrentVersion, UpdateInfo.Version, Notes]);
-    MessageDialog(MessageText, mtWarning, [mbOK]);
-    Exit(True);
-  end;
 
-  MessageText := Format(SqlMonitorTranslate('A new HeidiSQL CSLOG version is available.'),
-    [CurrentVersion, UpdateInfo.Version, Notes]);
-  Result := MessageDialog(MessageText, mtConfirmation, [mbYes, mbNo]) = mrYes;
+  MessageDialog(MessageText, mtInformation, [mbOK]);
+  Result := True;
 end;
 
 
