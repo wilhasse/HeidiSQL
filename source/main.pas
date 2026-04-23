@@ -3369,6 +3369,7 @@ var
   ProfileNode: PVirtualNode;
   Batch: TSQLBatch;
   Tab: TQueryTab;
+  PendingGrid: TVirtualStringTree;
   BindParam: Integer;
   NewSQL, msg, Command, SQLNoComments, CurrentQuery: String;
   Query: TSQLSentence;
@@ -3377,6 +3378,12 @@ var
   SqlMonitorContext: TSqlMonitorExecutionContext;
 begin
   Tab := QueryTabs.ActiveTab;
+  if QueryTabHasPendingGridChanges(Tab, PendingGrid) then begin
+    if not EnsureGridChangesPosted(PendingGrid, SqlMonitorTranslate('executing a new SQL query')) then begin
+      ValidateQueryControls(Sender);
+      Exit;
+    end;
+  end;
   OperationRunning(True);
   DoExecute := True;
   Batch := nil;

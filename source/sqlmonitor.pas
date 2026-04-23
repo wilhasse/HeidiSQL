@@ -350,6 +350,14 @@ begin
     Result := 'Esta versao CSLOG gerencia sessoes pelo catalogo da API. Use o HeidiSQL original para conexoes personalizadas.'
   else if SameText(MsgId, 'No managed sessions were loaded yet. Use More > Refresh sessions from API, or check the SQL monitor configuration.') then
     Result := 'Nenhuma sessao gerenciada foi carregada. Use Mais > Atualizar sessoes da API, ou verifique a configuracao do monitor SQL.'
+  else if SameText(MsgId, 'Pending grid changes') then
+    Result := 'Alteracoes pendentes na grade'
+  else if SameText(MsgId, 'There are pending grid changes. Use "Post changes" or "Cancel editing" before continuing.') then
+    Result := 'Existem alteracoes pendentes na grade. Use "Post changes" ou "Cancel editing" antes de continuar.'
+  else if SameText(MsgId, 'There are pending grid changes. Use "Post changes" or "Cancel editing" before %s.') then
+    Result := 'Existem alteracoes pendentes na grade. Use "Post changes" ou "Cancel editing" antes de %s.'
+  else if SameText(MsgId, 'executing a new SQL query') then
+    Result := 'executar uma nova consulta SQL'
   else if SameText(MsgId, 'Sessions in this build are managed by the CSLOG API catalog. Use stock HeidiSQL for custom connections.') then
     Result := 'As sessoes desta versao sao gerenciadas pelo catalogo da API CSLOG. Use o HeidiSQL original para conexoes personalizadas.'
   else if SameText(MsgId, 'HeidiSQL CSLOG update') then
