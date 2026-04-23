@@ -290,6 +290,18 @@ begin
     Result := 'Esta escrita aguardara aprovacao centralizada apos a confirmacao do numero do chamado.'
   else if SameText(MsgId, 'This write will be logged centrally after you confirm the ticket number.') then
     Result := 'Esta escrita sera registrada no monitor centralizado apos a confirmacao do numero do chamado.'
+  else if SameText(MsgId, 'Execution target') then
+    Result := 'Destino da execucao'
+  else if SameText(MsgId, 'Production environment') then
+    Result := 'AMBIENTE DE PRODUCAO'
+  else if SameText(MsgId, 'The following target will receive this SQL write:') then
+    Result := 'A escrita SQL sera executada no seguinte destino:'
+  else if SameText(MsgId, 'API approval confirmed this production write. Do you want to execute it now?') then
+    Result := 'A API confirmou esta escrita em producao. Deseja executar agora?'
+  else if SameText(MsgId, 'Confirm production execution') then
+    Result := 'Confirmar execucao em producao'
+  else if SameText(MsgId, 'Production execution was cancelled by the user after API approval.') then
+    Result := 'A execucao em producao foi cancelada pelo usuario apos a aprovacao da API.'
   else if SameText(MsgId, 'Confirm') then
     Result := 'Confirmar'
   else if SameText(MsgId, 'Central SQL monitor blocked execution') then
@@ -1371,6 +1383,29 @@ begin
 end;
 
 
+function SqlMonitorIsProductionTarget(Connection: TDBConnection): Boolean;
+begin
+  Result := (Connection <> nil) and (not SqlMonitorIsTestTarget(Connection)) and
+    (not SqlMonitorIsReplicaTarget(Connection));
+end;
+
+
+function SqlMonitorTargetDisplayName(Connection: TDBConnection): String;
+begin
+  Result := '';
+  if Connection = nil then
+    Exit;
+
+  Result := Trim(Connection.Parameters.SessionName);
+  if Result.IsEmpty then
+    Result := Trim(Connection.Parameters.SessionPath);
+  if Result.IsEmpty then
+    Result := ResolveTargetDatabase(Connection, '');
+  if Result.IsEmpty then
+    Result := Trim(Connection.Parameters.Hostname);
+end;
+
+
 function BuildStatementPreview(StatementSql: TStrings): String;
 var
   i, PreviewCount: Integer;
@@ -1399,19 +1434,22 @@ end;
 function PromptForTicketNumber(Connection: TDBConnection; StatementSql: TStrings; HasGuardedWrites: Boolean; out TicketNumber: String): Boolean;
 var
   Dialog: TForm;
-  IntroLabel, TicketLabel, TicketInfoLabel: TLabel;
+  IntroLabel, TicketLabel, TicketInfoLabel, TargetCaptionLabel, TargetValueLabel, ProductionLabel: TLabel;
   TicketEdit: TEdit;
   SummaryMemo: TMemo;
   ConfirmButton, CancelButton, LookupTicketButton: TButton;
   TicketController: TTicketLookupDialogState;
   CachedInfo, LoadedInfo: TSqlMonitorTicketInfo;
   HasCachedInfo: Boolean;
-  SummaryText, PreviewText: String;
-  IntroRect: TRect;
+  SummaryText, PreviewText, TargetDisplayName: String;
+  IntroRect, TargetRect, ProductionRect: TRect;
+  IsProductionTarget: Boolean;
 begin
   Result := False;
   TicketNumber := '';
   TicketController := nil;
+  IsProductionTarget := SqlMonitorIsProductionTarget(Connection);
+  TargetDisplayName := SqlMonitorTargetDisplayName(Connection);
   Dialog := TForm.CreateNew(MainForm);
   try
     Dialog.Caption := SqlMonitorTranslate('Confirm SQL write');
@@ -1423,9 +1461,54 @@ begin
     Dialog.Constraints.MinHeight := 330;
     Dialog.BorderIcons := [biSystemMenu, biMaximize];
 
+    TargetCaptionLabel := TLabel.Create(Dialog);
+    TargetCaptionLabel.Parent := Dialog;
+    TargetCaptionLabel.SetBounds(16, 16, Dialog.ClientWidth - 32, 18);
+    TargetCaptionLabel.Anchors := [akLeft, akTop, akRight];
+    TargetCaptionLabel.AutoSize := False;
+    TargetCaptionLabel.Caption := SqlMonitorTranslate('Execution target');
+    TargetCaptionLabel.Font.Style := [fsBold];
+
+    TargetValueLabel := TLabel.Create(Dialog);
+    TargetValueLabel.Parent := Dialog;
+    TargetValueLabel.SetBounds(16, TargetCaptionLabel.Top + TargetCaptionLabel.Height + 4, Dialog.ClientWidth - 32, 24);
+    TargetValueLabel.Anchors := [akLeft, akTop, akRight];
+    TargetValueLabel.AutoSize := False;
+    TargetValueLabel.WordWrap := True;
+    TargetValueLabel.Caption := TargetDisplayName;
+    TargetValueLabel.Font.Style := [fsBold];
+    if IsProductionTarget then
+      TargetValueLabel.Font.Color := clRed;
+    TargetRect := Rect(0, 0, TargetValueLabel.Width, 0);
+    DrawText(TargetValueLabel.Canvas.Handle, PChar(TargetValueLabel.Caption), Length(TargetValueLabel.Caption), TargetRect,
+      DT_CALCRECT or DT_WORDBREAK or DT_LEFT);
+    TargetValueLabel.Height := TargetRect.Bottom - TargetRect.Top + 4;
+
+    ProductionLabel := TLabel.Create(Dialog);
+    ProductionLabel.Parent := Dialog;
+    ProductionLabel.SetBounds(16, TargetValueLabel.Top + TargetValueLabel.Height + 4, Dialog.ClientWidth - 32, 18);
+    ProductionLabel.Anchors := [akLeft, akTop, akRight];
+    ProductionLabel.AutoSize := False;
+    ProductionLabel.WordWrap := True;
+    if IsProductionTarget then begin
+      ProductionLabel.Caption := SqlMonitorTranslate('Production environment');
+      ProductionLabel.Font.Color := clRed;
+      ProductionLabel.Font.Style := [fsBold];
+      ProductionRect := Rect(0, 0, ProductionLabel.Width, 0);
+      DrawText(ProductionLabel.Canvas.Handle, PChar(ProductionLabel.Caption), Length(ProductionLabel.Caption), ProductionRect,
+        DT_CALCRECT or DT_WORDBREAK or DT_LEFT);
+      ProductionLabel.Height := ProductionRect.Bottom - ProductionRect.Top + 4;
+    end else begin
+      ProductionLabel.Caption := SqlMonitorTranslate('The following target will receive this SQL write:');
+      ProductionRect := Rect(0, 0, ProductionLabel.Width, 0);
+      DrawText(ProductionLabel.Canvas.Handle, PChar(ProductionLabel.Caption), Length(ProductionLabel.Caption), ProductionRect,
+        DT_CALCRECT or DT_WORDBREAK or DT_LEFT);
+      ProductionLabel.Height := ProductionRect.Bottom - ProductionRect.Top + 4;
+    end;
+
     IntroLabel := TLabel.Create(Dialog);
     IntroLabel.Parent := Dialog;
-    IntroLabel.SetBounds(16, 16, Dialog.ClientWidth - 32, 24);
+    IntroLabel.SetBounds(16, ProductionLabel.Top + ProductionLabel.Height + 10, Dialog.ClientWidth - 32, 24);
     IntroLabel.Anchors := [akLeft, akTop, akRight];
     IntroLabel.AutoSize := False;
     IntroLabel.WordWrap := True;
@@ -1581,6 +1664,19 @@ begin
           Response.Free;
           Response := nil;
           Client.WaitForDecision(RequestId, Response);
+        end;
+
+        if HasGuardedWrites and SqlMonitorIsProductionTarget(Connection) and (Response.Status = smbsApproved) then begin
+          DecisionMsg := Format('%s'#13#10#13#10'%s',
+            [SqlMonitorTranslate('API approval confirmed this production write. Do you want to execute it now?'),
+             SqlMonitorTargetDisplayName(Connection)]);
+          if MessageDialog(SqlMonitorTranslate('Confirm production execution'), DecisionMsg, mtWarning, [mbYes, mbCancel]) <> mrYes then begin
+            if Assigned(MainForm) then
+              MainForm.LogSQL(SqlMonitorTranslate('SQL monitor blocked execution: ') +
+                SqlMonitorTranslate('Production execution was cancelled by the user after API approval.'), lcError, Connection);
+            Result := False;
+            Exit;
+          end;
         end;
 
         if HasWrites then begin
