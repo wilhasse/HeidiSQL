@@ -308,6 +308,10 @@ begin
     Result := 'Voce esta mudando para a seguinte conexao:'
   else if SameText(MsgId, 'Do you want to continue?') then
     Result := 'Deseja continuar?'
+  else if SameText(MsgId, 'Another HeidiSQL instance is already running. Close the other window before installing the update.') then
+    Result := 'Outra instancia do HeidiSQL ja esta em execucao. Feche a outra janela antes de instalar a atualizacao.'
+  else if SameText(MsgId, 'HeidiSQL CSLOG update was blocked because another HeidiSQL window is open. This window will be closed now.') then
+    Result := 'A atualizacao do HeidiSQL CSLOG foi bloqueada porque existe outra janela do HeidiSQL aberta. Esta janela sera fechada agora.'
   else if SameText(MsgId, 'Confirm') then
     Result := 'Confirmar'
   else if SameText(MsgId, 'Central SQL monitor blocked execution') then

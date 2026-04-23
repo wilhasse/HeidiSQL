@@ -11,7 +11,7 @@ function SqlMonitorCheckAndApplyClientUpdate(AOwner: TComponent; const CurrentVe
 implementation
 
 uses
-  System.SysUtils, System.JSON, System.StrUtils, System.Hash, System.Math, Winapi.Windows, Winapi.ShellAPI,
+  System.SysUtils, System.JSON, System.StrUtils, System.Hash, System.Math, Winapi.Windows, Winapi.ShellAPI, TlHelp32,
   Vcl.Forms, Vcl.Dialogs, Vcl.Controls, Vcl.StdCtrls,
   apphelpers, sqlmonitor;
 
@@ -96,6 +96,39 @@ begin
   while GetTickCount64 < Deadline do begin
     Application.ProcessMessages;
     Sleep(50);
+  end;
+end;
+
+
+function AnotherHeidiSqlInstanceRunning: Boolean;
+var
+  Snapshot: THandle;
+  Entry: TProcessEntry32;
+  CurrentProcessName, ProcessName: String;
+begin
+  Result := False;
+  CurrentProcessName := LowerCase(ExtractFileName(Application.ExeName));
+  if CurrentProcessName.IsEmpty then
+    Exit;
+
+  Snapshot := CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+  if Snapshot = INVALID_HANDLE_VALUE then
+    Exit;
+  try
+    ZeroMemory(@Entry, SizeOf(Entry));
+    Entry.dwSize := SizeOf(Entry);
+    if not Process32First(Snapshot, Entry) then
+      Exit;
+
+    repeat
+      if Entry.th32ProcessID <> GetCurrentProcessId then begin
+        ProcessName := LowerCase(ExtractFileName(Entry.szExeFile));
+        if ProcessName = CurrentProcessName then
+          Exit(True);
+      end;
+    until not Process32Next(Snapshot, Entry);
+  finally
+    CloseHandle(Snapshot);
   end;
 end;
 
@@ -431,6 +464,16 @@ begin
     end;
 
     CloseUpdateStatusDialog(StatusForm);
+    if AnotherHeidiSqlInstanceRunning then begin
+      MessageDialog(SqlMonitorTranslate('Another HeidiSQL instance is already running. Close the other window before installing the update.') +
+        sLineBreak + sLineBreak +
+        SqlMonitorTranslate('HeidiSQL CSLOG update was blocked because another HeidiSQL window is open. This window will be closed now.'),
+        mtWarning, [mbOK]);
+      Application.Terminate;
+      Result := True;
+      Exit;
+    end;
+
     if not ConfirmUpdate(UpdateInfo, CurrentVersion) then
       Exit;
 
