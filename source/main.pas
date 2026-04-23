@@ -10280,7 +10280,10 @@ end;
 
 procedure TMainForm.DBtreeFocusChanging(Sender: TBaseVirtualTree; OldNode,
   NewNode: PVirtualNode; OldColumn, NewColumn: TColumnIndex;
-  var Allowed: Boolean);
+  var Allowed: Boolean);
+var
+  OldDbObj, NewDbObj: PDBObject;
+  NewConnectionName, ConfirmMsg: String;
 begin
   // Check if some editor has unsaved changes
   if Assigned(ActiveObjectEditor) and Assigned(NewNode) and (NewNode <> OldNode) and (not FTreeRefreshInProgress) then begin
@@ -10292,6 +10295,23 @@ begin
     Allowed := NewNode <> OldNode;
   if Allowed and Assigned(NewNode) and (NewNode <> OldNode) and (not FTreeRefreshInProgress) then
     Allowed := EnsureGridChangesPosted(ActiveGrid, _('changing the selected object'));
+
+  if Allowed and Assigned(NewNode) and (NewNode <> OldNode) and (not FTreeRefreshInProgress) then begin
+    OldDbObj := nil;
+    NewDbObj := Sender.GetNodeData(NewNode);
+    if Assigned(OldNode) then
+      OldDbObj := Sender.GetNodeData(OldNode);
+    if Assigned(NewDbObj) and ((OldDbObj = nil) or (OldDbObj.Connection <> NewDbObj.Connection)) then begin
+      NewConnectionName := Trim(NewDbObj.Connection.Parameters.SessionName);
+      if NewConnectionName.IsEmpty then
+        NewConnectionName := Trim(NewDbObj.Connection.Parameters.SessionPath);
+      if NewConnectionName.IsEmpty then
+        NewConnectionName := Trim(NewDbObj.Connection.Parameters.Hostname);
+      ConfirmMsg := SqlMonitorTranslate('You are changing to the following connection:') + sLineBreak + sLineBreak +
+        NewConnectionName + sLineBreak + sLineBreak + SqlMonitorTranslate('Do you want to continue?');
+      Allowed := MessageDialog(SqlMonitorTranslate('Change connection'), ConfirmMsg, mtWarning, [mbYes, mbCancel]) = mrYes;
+    end;
+  end;
 end;
 
 

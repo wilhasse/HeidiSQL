@@ -302,6 +302,12 @@ begin
     Result := 'Confirmar execucao em producao'
   else if SameText(MsgId, 'Production execution was cancelled by the user after API approval.') then
     Result := 'A execucao em producao foi cancelada pelo usuario apos a aprovacao da API.'
+  else if SameText(MsgId, 'Change connection') then
+    Result := 'Alterar conexao'
+  else if SameText(MsgId, 'You are changing to the following connection:') then
+    Result := 'Voce esta mudando para a seguinte conexao:'
+  else if SameText(MsgId, 'Do you want to continue?') then
+    Result := 'Deseja continuar?'
   else if SameText(MsgId, 'Confirm') then
     Result := 'Confirmar'
   else if SameText(MsgId, 'Central SQL monitor blocked execution') then
