@@ -1289,6 +1289,8 @@ type
     FCommandStatsQueryCount: Int64;
     FCommandStatsServerUptime: Integer;
     FVariableNames, FSessionVars, FGlobalVars: TStringList;
+    FLastConnectionSwitchPrompt: String;
+    FLastConnectionSwitchPromptTick: Cardinal;
 
     procedure SetDelimiter(Value: String);
     procedure DisplayRowCountStats(Sender: TBaseVirtualTree);
@@ -3329,11 +3331,11 @@ begin
     Exit;
 
   if ActionDescription.IsEmpty then
-    MessageText := _('There are pending grid changes. Use "Post changes" or "Cancel editing" before continuing.')
+    MessageText := SqlMonitorTranslate('There are pending grid changes. Use "Post changes" or "Cancel editing" before continuing.')
   else
-    MessageText := f_('There are pending grid changes. Use "Post changes" or "Cancel editing" before %s.', [ActionDescription]);
+    MessageText := Format(SqlMonitorTranslate('There are pending grid changes. Use "Post changes" or "Cancel editing" before %s.'), [ActionDescription]);
 
-  MessageDialog(_('Pending grid changes'), MessageText, mtWarning, [mbOK]);
+  MessageDialog(SqlMonitorTranslate('Pending grid changes'), MessageText, mtWarning, [mbOK]);
 
   if Grid is TVirtualStringTree then begin
     TargetGrid := TVirtualStringTree(Grid);
@@ -10283,7 +10285,7 @@ procedure TMainForm.DBtreeFocusChanging(Sender: TBaseVirtualTree; OldNode,
   var Allowed: Boolean);
 var
   OldDbObj, NewDbObj: PDBObject;
-  NewConnectionName, ConfirmMsg: String;
+  NewConnectionName, ConfirmMsg, PromptKey: String;
 begin
   // Check if some editor has unsaved changes
   if Assigned(ActiveObjectEditor) and Assigned(NewNode) and (NewNode <> OldNode) and (not FTreeRefreshInProgress) then begin
@@ -10307,10 +10309,19 @@ begin
         NewConnectionName := Trim(NewDbObj.Connection.Parameters.SessionPath);
       if NewConnectionName.IsEmpty then
         NewConnectionName := Trim(NewDbObj.Connection.Parameters.Hostname);
-      ConfirmMsg := SqlMonitorTranslate('You are changing to the following connection:') + sLineBreak + sLineBreak +
-        NewConnectionName + sLineBreak + sLineBreak + SqlMonitorTranslate('Do you want to continue?');
-      Allowed := MessageDialog(SqlMonitorTranslate('Change connection'), ConfirmMsg, mtWarning, [mbYes, mbCancel]) = mrYes;
-    end;
+      PromptKey := '';
+      if Assigned(OldDbObj) then
+        PromptKey := Trim(OldDbObj.Connection.Parameters.SessionPath);
+      PromptKey := PromptKey + '->' + Trim(NewDbObj.Connection.Parameters.SessionPath);
+      // VirtualTree can fire two focus-change notifications for the same transition.
+      if (PromptKey <> FLastConnectionSwitchPrompt) or (GetTickCount - FLastConnectionSwitchPromptTick > 1000) then begin
+        ConfirmMsg := SqlMonitorTranslate('You are changing to the following connection:') + sLineBreak + sLineBreak +
+          NewConnectionName + sLineBreak + sLineBreak + SqlMonitorTranslate('Do you want to continue?');
+        Allowed := MessageDialog(SqlMonitorTranslate('Change connection'), ConfirmMsg, mtWarning, [mbYes, mbCancel]) = mrYes;
+        FLastConnectionSwitchPrompt := PromptKey;
+        FLastConnectionSwitchPromptTick := GetTickCount;
+      end;
+     end;
   end;
 end;
 

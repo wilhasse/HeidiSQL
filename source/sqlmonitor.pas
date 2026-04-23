@@ -1440,7 +1440,7 @@ end;
 function PromptForTicketNumber(Connection: TDBConnection; StatementSql: TStrings; HasGuardedWrites: Boolean; out TicketNumber: String): Boolean;
 var
   Dialog: TForm;
-  IntroLabel, TicketLabel, TicketInfoLabel, TargetCaptionLabel, TargetValueLabel, ProductionLabel: TLabel;
+  IntroLabel, TicketLabel, TicketInfoLabel, TargetCaptionLabel, TargetValueLabel: TLabel;
   TicketEdit: TEdit;
   SummaryMemo: TMemo;
   ConfirmButton, CancelButton, LookupTicketButton: TButton;
@@ -1448,7 +1448,7 @@ var
   CachedInfo, LoadedInfo: TSqlMonitorTicketInfo;
   HasCachedInfo: Boolean;
   SummaryText, PreviewText, TargetDisplayName: String;
-  IntroRect, TargetRect, ProductionRect: TRect;
+  IntroRect, TargetRect: TRect;
   IsProductionTarget: Boolean;
 begin
   Result := False;
@@ -1490,31 +1490,9 @@ begin
       DT_CALCRECT or DT_WORDBREAK or DT_LEFT);
     TargetValueLabel.Height := TargetRect.Bottom - TargetRect.Top + 4;
 
-    ProductionLabel := TLabel.Create(Dialog);
-    ProductionLabel.Parent := Dialog;
-    ProductionLabel.SetBounds(16, TargetValueLabel.Top + TargetValueLabel.Height + 4, Dialog.ClientWidth - 32, 18);
-    ProductionLabel.Anchors := [akLeft, akTop, akRight];
-    ProductionLabel.AutoSize := False;
-    ProductionLabel.WordWrap := True;
-    if IsProductionTarget then begin
-      ProductionLabel.Caption := SqlMonitorTranslate('Production environment');
-      ProductionLabel.Font.Color := clRed;
-      ProductionLabel.Font.Style := [fsBold];
-      ProductionRect := Rect(0, 0, ProductionLabel.Width, 0);
-      DrawText(ProductionLabel.Canvas.Handle, PChar(ProductionLabel.Caption), Length(ProductionLabel.Caption), ProductionRect,
-        DT_CALCRECT or DT_WORDBREAK or DT_LEFT);
-      ProductionLabel.Height := ProductionRect.Bottom - ProductionRect.Top + 4;
-    end else begin
-      ProductionLabel.Caption := SqlMonitorTranslate('The following target will receive this SQL write:');
-      ProductionRect := Rect(0, 0, ProductionLabel.Width, 0);
-      DrawText(ProductionLabel.Canvas.Handle, PChar(ProductionLabel.Caption), Length(ProductionLabel.Caption), ProductionRect,
-        DT_CALCRECT or DT_WORDBREAK or DT_LEFT);
-      ProductionLabel.Height := ProductionRect.Bottom - ProductionRect.Top + 4;
-    end;
-
     IntroLabel := TLabel.Create(Dialog);
     IntroLabel.Parent := Dialog;
-    IntroLabel.SetBounds(16, ProductionLabel.Top + ProductionLabel.Height + 10, Dialog.ClientWidth - 32, 24);
+    IntroLabel.SetBounds(16, TargetValueLabel.Top + TargetValueLabel.Height + 10, Dialog.ClientWidth - 32, 24);
     IntroLabel.Anchors := [akLeft, akTop, akRight];
     IntroLabel.AutoSize := False;
     IntroLabel.WordWrap := True;
