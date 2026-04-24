@@ -3522,7 +3522,7 @@ begin
   Tab := QueryTabs.TabByNumber(Thread.TabNumber);
 
   // Use session color on result tabs
-  TabsetColor := Thread.Connection.Parameters.SessionColor;
+  TabsetColor := Thread.Connection.Parameters.EffectiveSessionColor;
   if TabsetColor <> clNone then begin
     Tab.tabsetQuery.SelectedColor := TabsetColor;
     Tab.tabsetQuery.UnselectedColor := ColorAdjustLuma(TabsetColor, 20, False);
@@ -6963,8 +6963,8 @@ begin
   actCodeFoldingEndRegion.Enabled := InQueryTab;
   actCodeFoldingFoldSelection.Enabled := HasSelection;
   if InQueryTab then begin
-    if HasConnection and (Conn.Parameters.SessionColor <> clNone) then begin
-      Tab.Memo.Gutter.Color := Conn.Parameters.SessionColor;
+    if HasConnection and (Conn.Parameters.EffectiveSessionColor <> clNone) then begin
+      Tab.Memo.Gutter.Color := Conn.Parameters.EffectiveSessionColor;
     end
     else begin
       Tab.Memo.Gutter.Color := clBtnFace;
@@ -11579,8 +11579,8 @@ begin
   end;
 
   if ResultCol < 0 then begin
-    if r.Connection.Parameters.SessionColor <> AppSettings.GetDefaultInt(asTreeBackground) then
-      TargetCanvas.Brush.Color := r.Connection.Parameters.SessionColor
+    if r.Connection.Parameters.EffectiveSessionColor <> AppSettings.GetDefaultInt(asTreeBackground) then
+      TargetCanvas.Brush.Color := r.Connection.Parameters.EffectiveSessionColor
     else
       TargetCanvas.Brush.Color := clBtnFace;
     TargetCanvas.FillRect(CellRect);
@@ -14094,8 +14094,8 @@ var
 begin
   if CellPaintMode=cpmPaint then try
     DBObj := Sender.GetNodeData(Node);
-    if DbObj.Connection.Parameters.SessionColor <> AppSettings.GetDefaultInt(asTreeBackground) then begin
-      TargetCanvas.Brush.Color := DbObj.Connection.Parameters.SessionColor;
+    if DbObj.Connection.Parameters.EffectiveSessionColor <> AppSettings.GetDefaultInt(asTreeBackground) then begin
+      TargetCanvas.Brush.Color := DbObj.Connection.Parameters.EffectiveSessionColor;
       TargetCanvas.FillRect(CellRect);
     end;
     if (Column=1) and DBObj.Connection.DbObjectsCached(DBObj.Database) then begin

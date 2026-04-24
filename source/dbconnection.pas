@@ -357,6 +357,11 @@ type
       function DefaultIgnoreDatabasePattern: String;
       function DefaultSshActive: Boolean;
       function GetExternalCliArguments(Connection: TDBConnection; ReplacePassword: TThreeStateBoolean): String;
+      function IsManagedTestTarget: Boolean;
+      function IsManagedReplicaTarget: Boolean;
+      function IsManagedProductionTarget: Boolean;
+      function UsesManagedEnvironmentColor: Boolean;
+      function EffectiveSessionColor: TColor;
     published
       property IsFolder: Boolean read FIsFolder write FIsFolder;
       property NetType: TNetType read FNetType write FNetType;
@@ -2084,6 +2089,63 @@ begin
     Result := Copy(FSessionPath, LastBackSlash+1, MaxInt)
   else
     Result := FSessionPath;
+end;
+
+
+function TConnectionParameters.IsManagedTestTarget: Boolean;
+var
+  Haystack: String;
+begin
+  Haystack := UpperCase(FSessionPath + ' ' + SessionName + ' ' + FAllDatabases + ' ' + FComment);
+  Result := FApiManaged and (Pos('TESTE', Haystack) > 0);
+end;
+
+
+function TConnectionParameters.IsManagedReplicaTarget: Boolean;
+var
+  Haystack: String;
+begin
+  Haystack := UpperCase(FSessionPath + ' ' + SessionName + ' ' + FAllDatabases + ' ' + FComment);
+  Result := FApiManaged and (Pos('ESPELHO', Haystack) > 0);
+end;
+
+
+function TConnectionParameters.IsManagedProductionTarget: Boolean;
+begin
+  Result := FApiManaged and (not IsManagedTestTarget) and (not IsManagedReplicaTarget);
+end;
+
+
+function TConnectionParameters.UsesManagedEnvironmentColor: Boolean;
+var
+  OverrideColor: TColor;
+begin
+  OverrideColor := clNone;
+  if IsManagedTestTarget then
+    OverrideColor := AppSettings.ReadInt(asManagedColorTest)
+  else if IsManagedReplicaTarget then
+    OverrideColor := AppSettings.ReadInt(asManagedColorReplica)
+  else if IsManagedProductionTarget then
+    OverrideColor := AppSettings.ReadInt(asManagedColorProduction);
+  Result := OverrideColor <> clNone;
+end;
+
+
+function TConnectionParameters.EffectiveSessionColor: TColor;
+begin
+  Result := FSessionColor;
+  if IsManagedTestTarget then begin
+    if AppSettings.ReadInt(asManagedColorTest) <> clNone then
+      Result := AppSettings.ReadInt(asManagedColorTest);
+  end
+  else if IsManagedReplicaTarget then begin
+    if AppSettings.ReadInt(asManagedColorReplica) <> clNone then
+      Result := AppSettings.ReadInt(asManagedColorReplica);
+  end
+  else if IsManagedProductionTarget then begin
+    if AppSettings.ReadInt(asManagedColorProduction) <> clNone then
+      Result := AppSettings.ReadInt(asManagedColorProduction);
+  end;
 end;
 
 

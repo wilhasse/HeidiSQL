@@ -364,8 +364,8 @@ begin
 
   Params := comboExportOutputType.Items.Objects[Index] as TConnectionParameters;
   if Assigned(Params) then begin
-    if (Params.SessionColor <> clNone) and (not (odSelected in State)) then begin
-      Canv.Brush.Color := Params.SessionColor;
+    if (Params.EffectiveSessionColor <> clNone) and (not (odSelected in State)) then begin
+      Canv.Brush.Color := Params.EffectiveSessionColor;
       Canv.Pen.Color := clWindowText;
     end;
     ItemImageIndex := Params.ImageIndex;

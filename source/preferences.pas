@@ -253,7 +253,16 @@ type
     FThemePreview: TfrmThemePreview;
     FHotKey1: TExtSynHotKey;
     FHotKey2: TExtSynHotKey;
+    tabCslogSessions: TTabSheet;
+    lblManagedColorsHint: TLabel;
+    lblManagedProdColor: TLabel;
+    lblManagedReplicaColor: TLabel;
+    lblManagedTestColor: TLabel;
+    cboxManagedProdColor: TColorBox;
+    cboxManagedReplicaColor: TColorBox;
+    cboxManagedTestColor: TColorBox;
     procedure InitLanguages;
+    procedure CreateManagedSessionsTab;
     procedure SelectDirectory(Sender: TObject; NewFolderButton: Boolean);
     function EnsureShortcutIsUnused(RequestShortcut: TShortCut): Boolean;
   public
@@ -300,6 +309,87 @@ begin
 end;
 
 
+procedure TfrmPreferences.CreateManagedSessionsTab;
+const
+  ColorBoxStyle = [cbStandardColors, cbExtendedColors, cbSystemColors, cbIncludeNone,
+    cbIncludeDefault, cbCustomColor, cbPrettyNames, cbCustomColors];
+var
+  TopPos: Integer;
+begin
+  if Assigned(tabCslogSessions) or (not CSLOG_BUILD) then
+    Exit;
+
+  tabCslogSessions := TTabSheet.Create(Self);
+  tabCslogSessions.PageControl := pagecontrolMain;
+  tabCslogSessions.Caption := 'CSLOG';
+  tabCslogSessions.ImageIndex := tabMisc.ImageIndex;
+
+  lblManagedColorsHint := TLabel.Create(tabCslogSessions);
+  lblManagedColorsHint.Parent := tabCslogSessions;
+  lblManagedColorsHint.Left := 16;
+  lblManagedColorsHint.Top := 16;
+  lblManagedColorsHint.Width := tabCslogSessions.ClientWidth - 32;
+  lblManagedColorsHint.AutoSize := False;
+  lblManagedColorsHint.WordWrap := True;
+  lblManagedColorsHint.Caption := _('Choose background colors for API-managed sessions by environment. "None" keeps the session-specific color.');
+  lblManagedColorsHint.Anchors := [akLeft, akTop, akRight];
+
+  TopPos := 72;
+
+  lblManagedProdColor := TLabel.Create(tabCslogSessions);
+  lblManagedProdColor.Parent := tabCslogSessions;
+  lblManagedProdColor.Left := 16;
+  lblManagedProdColor.Top := TopPos + 4;
+  lblManagedProdColor.Caption := _('Production');
+
+  cboxManagedProdColor := TColorBox.Create(tabCslogSessions);
+  cboxManagedProdColor.Parent := tabCslogSessions;
+  cboxManagedProdColor.Left := 220;
+  cboxManagedProdColor.Top := TopPos;
+  cboxManagedProdColor.Width := 320;
+  cboxManagedProdColor.Anchors := [akLeft, akTop, akRight];
+  cboxManagedProdColor.Style := ColorBoxStyle;
+  cboxManagedProdColor.NoneColorColor := clNone;
+  cboxManagedProdColor.OnChange := Modified;
+
+  Inc(TopPos, 32);
+
+  lblManagedReplicaColor := TLabel.Create(tabCslogSessions);
+  lblManagedReplicaColor.Parent := tabCslogSessions;
+  lblManagedReplicaColor.Left := 16;
+  lblManagedReplicaColor.Top := TopPos + 4;
+  lblManagedReplicaColor.Caption := _('Replica (Espelho)');
+
+  cboxManagedReplicaColor := TColorBox.Create(tabCslogSessions);
+  cboxManagedReplicaColor.Parent := tabCslogSessions;
+  cboxManagedReplicaColor.Left := 220;
+  cboxManagedReplicaColor.Top := TopPos;
+  cboxManagedReplicaColor.Width := 320;
+  cboxManagedReplicaColor.Anchors := [akLeft, akTop, akRight];
+  cboxManagedReplicaColor.Style := ColorBoxStyle;
+  cboxManagedReplicaColor.NoneColorColor := clNone;
+  cboxManagedReplicaColor.OnChange := Modified;
+
+  Inc(TopPos, 32);
+
+  lblManagedTestColor := TLabel.Create(tabCslogSessions);
+  lblManagedTestColor.Parent := tabCslogSessions;
+  lblManagedTestColor.Left := 16;
+  lblManagedTestColor.Top := TopPos + 4;
+  lblManagedTestColor.Caption := _('Test (Teste)');
+
+  cboxManagedTestColor := TColorBox.Create(tabCslogSessions);
+  cboxManagedTestColor.Parent := tabCslogSessions;
+  cboxManagedTestColor.Left := 220;
+  cboxManagedTestColor.Top := TopPos;
+  cboxManagedTestColor.Width := 320;
+  cboxManagedTestColor.Anchors := [akLeft, akTop, akRight];
+  cboxManagedTestColor.Style := ColorBoxStyle;
+  cboxManagedTestColor.NoneColorColor := clNone;
+  cboxManagedTestColor.OnChange := Modified;
+end;
+
+
 {**
   Apply settings to registry and mainform
 }
@@ -310,6 +400,8 @@ var
   CatNode, ItemNode: PVirtualNode;
   Data: PShortcutItemData;
   LangCode: String;
+  QueryTab: TQueryTab;
+  SessionColor: TColor;
 begin
   Screen.Cursor := crHourGlass;
 
@@ -383,6 +475,11 @@ begin
   AppSettings.WriteString(asSqlMonitorUrl, editSqlMonitorUrl.Text);
   AppSettings.WriteString(asSqlMonitorApiKey, editSqlMonitorApiKey.Text);
   AppSettings.WriteBool(asSqlMonitorCentralAuthEnabled, CSLOG_BUILD or chkSqlMonitorCentralAuth.Checked);
+  if Assigned(cboxManagedProdColor) then begin
+    AppSettings.WriteInt(asManagedColorProduction, cboxManagedProdColor.Selected);
+    AppSettings.WriteInt(asManagedColorReplica, cboxManagedReplicaColor.Selected);
+    AppSettings.WriteInt(asManagedColorTest, cboxManagedTestColor.Selected);
+  end;
   SqlMonitorRefreshConfiguration;
 
   AppSettings.WriteInt(asMaxQueryResults, updownMaxQueryResults.Position);
@@ -481,6 +578,25 @@ begin
   Mainform.ListTables.Invalidate;
   Mainform.ListProcesses.Invalidate;
   Mainform.ListCommandStats.Invalidate;
+  MainForm.DBtree.Invalidate;
+
+  if MainForm.QueryTabs.HasActiveTab and Assigned(MainForm.ActiveConnection) then begin
+    SessionColor := MainForm.ActiveConnection.Parameters.EffectiveSessionColor;
+    if SessionColor <> clNone then
+      MainForm.QueryTabs.ActiveTab.Memo.Gutter.Color := SessionColor
+    else
+      MainForm.QueryTabs.ActiveTab.Memo.Gutter.Color := clBtnFace;
+    if SessionColor <> clNone then begin
+      MainForm.QueryTabs.ActiveTab.tabsetQuery.SelectedColor := SessionColor;
+      MainForm.QueryTabs.ActiveTab.tabsetQuery.UnselectedColor := ColorAdjustLuma(SessionColor, 20, False);
+    end else begin
+      MainForm.QueryTabs.ActiveTab.tabsetQuery.SelectedColor := clWindow;
+      MainForm.QueryTabs.ActiveTab.tabsetQuery.UnselectedColor := clBtnFace;
+    end;
+  end;
+
+  for QueryTab in MainForm.QueryTabs do
+    QueryTab.tabsetQuery.Invalidate;
 
 
   FRestartOptionApplied := FRestartOptionTouched;
@@ -697,6 +813,8 @@ begin
   Reformatter := TfrmReformatter.Create(Self);
   comboReformatter.Items.AddStrings(Reformatter.grpReformatter.Items);
   Reformatter.Free;
+
+  CreateManagedSessionsTab;
 end;
 
 
@@ -754,6 +872,11 @@ begin
     editSqlMonitorApiKey.Text := AppSettings.ReadString(asSqlMonitorApiKey);
     chkSqlMonitorCentralAuth.Checked := CSLOG_BUILD or AppSettings.ReadBool(asSqlMonitorCentralAuthEnabled);
     chkSqlMonitorCentralAuth.Enabled := not CSLOG_BUILD;
+    if Assigned(cboxManagedProdColor) then begin
+      cboxManagedProdColor.Selected := AppSettings.ReadInt(asManagedColorProduction);
+      cboxManagedReplicaColor.Selected := AppSettings.ReadInt(asManagedColorReplica);
+      cboxManagedTestColor.Selected := AppSettings.ReadInt(asManagedColorTest);
+    end;
   finally
     AppSettings.RestorePath;
   end;

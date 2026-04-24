@@ -232,6 +232,7 @@ type
     asTabsToSpaces, asFilterPanel, asAllowMultipleInstances, asFindDialogSearchHistory, asGUIFontName, asGUIFontSize,
     asTheme, asIconPack, asWebSearchBaseUrl, asSqlMonitorUrl, asSqlMonitorApiKey, asSqlMonitorCentralAuthEnabled,
     asApiManaged, asApiConnectionId, asApiMatchHost, asApiMatchDatabase, asApiLastSyncAt, asApiArchived, asApiCustomer,
+    asManagedColorProduction, asManagedColorReplica, asManagedColorTest,
     asFindDialogReplaceHistory, asMaxQueryResults, asLogErrors,
     asLogUserSQL, asLogSQL, asLogInfos, asLogDebug, asLogScript, asLogTimestamp, asFieldColorNumeric,
     asFieldColorReal, asFieldColorText, asFieldColorBinary, asFieldColorDatetime, asFieldColorSpatial,
@@ -4263,6 +4264,9 @@ begin
   InitSetting(asListColSort,                      'ColSort_%s',                            0, False, '');
   InitSetting(asSessionFolder,                    'Folder',                                0, False, '', True);
   InitSetting(asApiManaged,                       'ApiManaged',                            0, False, '', True);
+  InitSetting(asManagedColorProduction,           'ManagedColorProduction',                clNone);
+  InitSetting(asManagedColorReplica,              'ManagedColorReplica',                   clNone);
+  InitSetting(asManagedColorTest,                 'ManagedColorTest',                      clNone);
   InitSetting(asApiConnectionId,                  'ApiConnectionId',                       0, False, '', True);
   InitSetting(asApiMatchHost,                     'ApiMatchHost',                          0, False, '', True);
   InitSetting(asApiMatchDatabase,                 'ApiMatchDatabase',                      0, False, '', True);

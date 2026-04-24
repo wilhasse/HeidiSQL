@@ -1010,12 +1010,14 @@ procedure Tconnform.ListSessionsBeforeCellPaint(Sender: TBaseVirtualTree;
   CellPaintMode: TVTCellPaintMode; CellRect: TRect; var ContentRect: TRect);
 var
   Session: PConnectionParameters;
+  SessionColor: TColor;
 begin
   // Paint custom background color
   if CellPaintMode=cpmPaint then begin
     Session := Sender.GetNodeData(Node);
-    if Session.SessionColor <> AppSettings.GetDefaultInt(asTreeBackground) then begin
-      TargetCanvas.Brush.Color := Session.SessionColor;
+    SessionColor := Session.EffectiveSessionColor;
+    if SessionColor <> AppSettings.GetDefaultInt(asTreeBackground) then begin
+      TargetCanvas.Brush.Color := SessionColor;
       TargetCanvas.FillRect(CellRect);
     end;
   end;
@@ -1171,6 +1173,7 @@ procedure Tconnform.ListSessionsFocusChanged(Sender: TBaseVirtualTree;
 var
   SessionFocused, InFolder: Boolean;
   Sess: PConnectionParameters;
+  DisplayColor: TColor;
 begin
   // select one connection!
   Screen.Cursor := crHourglass;
@@ -1226,9 +1229,10 @@ begin
     updownKeepAlive.Position := Sess.KeepAlive;
     chkLocalTimeZone.Checked := Sess.LocalTimeZone;
     chkFullTableStatus.Checked := Sess.FullTableStatus;
-    ColorBoxBackgroundColor.Items.Objects[0] := TObject(Sess.SessionColor);
-    if Sess.SessionColor = clNone then
-      ColorBoxBackgroundColor.Selected := Sess.SessionColor
+    DisplayColor := Sess.EffectiveSessionColor;
+    ColorBoxBackgroundColor.Items.Objects[0] := TObject(DisplayColor);
+    if DisplayColor = clNone then
+      ColorBoxBackgroundColor.Selected := DisplayColor
     else
       ColorBoxBackgroundColor.ItemIndex := 0;
     editDatabases.Text := Sess.AllDatabasesStr;
@@ -1853,7 +1857,7 @@ begin
         updownPort.Enabled := False;
         chkCompressed.Enabled := False;
         editDatabases.Enabled := False;
-        ColorBoxBackgroundColor.Enabled := True;
+        ColorBoxBackgroundColor.Enabled := not Params.UsesManagedEnvironmentColor;
         memoComment.Enabled := False;
         editStartupScript.Enabled := False;
         chkSSHActive.Enabled := False;
