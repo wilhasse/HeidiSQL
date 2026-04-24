@@ -331,7 +331,7 @@ begin
   lblManagedColorsHint.Width := tabCslogSessions.ClientWidth - 32;
   lblManagedColorsHint.AutoSize := False;
   lblManagedColorsHint.WordWrap := True;
-  lblManagedColorsHint.Caption := _('Choose background colors for API-managed sessions by environment. "None" keeps the session-specific color.');
+  lblManagedColorsHint.Caption := SqlMonitorTranslate('Choose background colors for API-managed sessions by environment. "None" keeps the session-specific color.');
   lblManagedColorsHint.Anchors := [akLeft, akTop, akRight];
 
   TopPos := 72;
@@ -340,7 +340,7 @@ begin
   lblManagedProdColor.Parent := tabCslogSessions;
   lblManagedProdColor.Left := 16;
   lblManagedProdColor.Top := TopPos + 4;
-  lblManagedProdColor.Caption := _('Production');
+  lblManagedProdColor.Caption := SqlMonitorTranslate('Production');
 
   cboxManagedProdColor := TColorBox.Create(tabCslogSessions);
   cboxManagedProdColor.Parent := tabCslogSessions;
@@ -358,7 +358,7 @@ begin
   lblManagedReplicaColor.Parent := tabCslogSessions;
   lblManagedReplicaColor.Left := 16;
   lblManagedReplicaColor.Top := TopPos + 4;
-  lblManagedReplicaColor.Caption := _('Replica (Espelho)');
+  lblManagedReplicaColor.Caption := SqlMonitorTranslate('Replica (Espelho)');
 
   cboxManagedReplicaColor := TColorBox.Create(tabCslogSessions);
   cboxManagedReplicaColor.Parent := tabCslogSessions;
@@ -376,7 +376,7 @@ begin
   lblManagedTestColor.Parent := tabCslogSessions;
   lblManagedTestColor.Left := 16;
   lblManagedTestColor.Top := TopPos + 4;
-  lblManagedTestColor.Caption := _('Test (Teste)');
+  lblManagedTestColor.Caption := SqlMonitorTranslate('Test (Teste)');
 
   cboxManagedTestColor := TColorBox.Create(tabCslogSessions);
   cboxManagedTestColor.Parent := tabCslogSessions;

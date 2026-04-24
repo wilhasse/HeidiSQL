@@ -408,6 +408,14 @@ begin
     Result := 'A atualizacao do HeidiSQL CSLOG foi baixada e sera instalada agora. O aplicativo sera fechado.'
   else if SameText(MsgId, 'Unable to install HeidiSQL CSLOG update: ') then
     Result := 'Nao foi possivel instalar a atualizacao do HeidiSQL CSLOG: ';
+  else if SameText(MsgId, 'Choose background colors for API-managed sessions by environment. "None" keeps the session-specific color.') then
+    Result := 'Escolha as cores de fundo das sessoes gerenciadas pela API por ambiente. "Nenhuma" mantem a cor especifica da sessao.'
+  else if SameText(MsgId, 'Production') then
+    Result := 'Producao'
+  else if SameText(MsgId, 'Replica (Espelho)') then
+    Result := 'Replica (Espelho)'
+  else if SameText(MsgId, 'Test (Teste)') then
+    Result := 'Teste (Teste)';
 end;
 
 
