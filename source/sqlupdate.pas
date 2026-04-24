@@ -100,6 +100,16 @@ begin
 end;
 
 
+function IsHeidiSqlProcessName(const ProcessName: String): Boolean;
+var
+  NormalizedName: String;
+begin
+  NormalizedName := LowerCase(Trim(ProcessName));
+  Result := (NormalizedName = 'heidisql.exe')
+    or (NormalizedName = 'heidisql64.exe');
+end;
+
+
 function AnotherHeidiSqlInstanceRunning: Boolean;
 var
   Snapshot: THandle;
@@ -123,7 +133,8 @@ begin
     repeat
       if Entry.th32ProcessID <> GetCurrentProcessId then begin
         ProcessName := LowerCase(ExtractFileName(Entry.szExeFile));
-        if ProcessName = CurrentProcessName then
+        if (ProcessName = CurrentProcessName) or
+          (IsHeidiSqlProcessName(CurrentProcessName) and IsHeidiSqlProcessName(ProcessName)) then
           Exit(True);
       end;
     until not Process32Next(Snapshot, Entry);
