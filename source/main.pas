@@ -616,6 +616,7 @@ type
     btnTreeFavorites: TToolButton;
     actFavoriteObjectsOnly: TAction;
     ToolBarMainButtons: TToolBar;
+    lblToolbarBase: TLabel;
     actFavoriteObjectsOnly1: TMenuItem;
     Fullstatusrefresh1: TMenuItem;
     N10: TMenuItem;
@@ -1291,6 +1292,7 @@ type
     FVariableNames, FSessionVars, FGlobalVars: TStringList;
     FLastConnectionSwitchPrompt: String;
     FLastConnectionSwitchPromptTick: Cardinal;
+    FLastConnectionSwitchPromptAllowed: Boolean;
 
     procedure SetDelimiter(Value: String);
     procedure DisplayRowCountStats(Sender: TBaseVirtualTree);
@@ -1305,6 +1307,8 @@ type
     function QueryTabHasPendingGridChanges(Tab: TQueryTab; out PendingGrid: TVirtualStringTree): Boolean;
     procedure SetActiveDatabase(db: String; Connection: TDBConnection);
     procedure SetActiveDBObj(Obj: TDBObject);
+    function GetToolbarBaseDisplayName(Connection: TDBConnection): String;
+    procedure UpdateToolbarBaseLabel;
     procedure ToggleFilterPanel(ForceVisible: Boolean = False);
     procedure EnableDataTab(Enable: Boolean);
     procedure AutoCalcColWidth(Tree: TVirtualStringTree; Column: TColumnIndex);
@@ -2813,6 +2817,51 @@ begin
   Help(Sender, '');
 end;
 
+function TMainForm.GetToolbarBaseDisplayName(Connection: TDBConnection): String;
+begin
+  Result := '';
+  if Connection = nil then
+    Exit;
+
+  Result := Trim(Connection.Parameters.SessionName);
+  if Result.IsEmpty then
+    Result := Trim(Connection.Parameters.SessionPath);
+  if Result.IsEmpty then
+    Result := Trim(Connection.Parameters.Hostname);
+end;
+
+
+procedure TMainForm.UpdateToolbarBaseLabel;
+var
+  CaptionText: String;
+  LeftPos, TopPos, MaxWidth: Integer;
+begin
+  if not Assigned(lblToolbarBase) then
+    Exit;
+
+  CaptionText := '';
+  if Assigned(ActiveConnection) then
+    CaptionText := Format(SqlMonitorTranslate('Assessoria Base: %s'), [GetToolbarBaseDisplayName(ActiveConnection)]);
+
+  lblToolbarBase.Caption := CaptionText;
+  lblToolbarBase.Hint := CaptionText;
+  lblToolbarBase.Visible := not CaptionText.IsEmpty;
+  if not lblToolbarBase.Visible then
+    Exit;
+
+  LeftPos := ToolBarMainButtons.Left + ToolBarMainButtons.Width + 8;
+  if ToolBarDonate.Visible then
+    MaxWidth := ToolBarDonate.Left - LeftPos - 8
+  else
+    MaxWidth := ControlBarMain.ClientWidth - LeftPos - 8;
+  if MaxWidth < 0 then
+    MaxWidth := 0;
+
+  TopPos := ToolBarMainButtons.Top + ((ToolBarMainButtons.Height - lblToolbarBase.Height) div 2);
+  lblToolbarBase.SetBounds(LeftPos, TopPos, MaxWidth, lblToolbarBase.Height);
+end;
+
+
 procedure TMainForm.FormResize(Sender: TObject);
 var
   PanelRect: TRect;
@@ -2873,6 +2922,7 @@ begin
     //ToolBarDonate.Buttons[0].Height := ToolBarMainButtons.Buttons[0].Height;
   end;
 
+  UpdateToolbarBaseLabel;
 end;
 
 procedure TMainForm.FormShow(Sender: TObject);
@@ -10239,6 +10289,7 @@ begin
     SetTabCaption(tabHost.PageIndex, FActiveDbObj.Connection.Parameters.SessionName);
     SetTabCaption(tabDatabase.PageIndex, _('Database')+': '+FActiveDbObj.Connection.Database);
     ShowStatusMsg(FActiveDbObj.Connection.Parameters.NetTypeName(False)+' '+FActiveDbObj.Connection.ServerVersionStr, 3);
+    UpdateToolbarBaseLabel;
   end else begin
     LogSQL('DBtreeFocusChanged without node.', lcDebug);
     FreeAndNil(FActiveDbObj);
@@ -10246,6 +10297,7 @@ begin
     tabDatabase.Caption := _('Database');
     // Clear server version panel
     ShowStatusMsg('', 3);
+    UpdateToolbarBaseLabel;
   end;
 
   if (FActiveDbObj = nil) or (PrevDBObj = nil) or (PrevDBObj.Connection <> FActiveDbObj.Connection) then begin
@@ -10280,39 +10332,46 @@ begin
 end;
 
 
-procedure TMainForm.DBtreeFocusChanging(Sender: TBaseVirtualTree; OldNode,
-  NewNode: PVirtualNode; OldColumn, NewColumn: TColumnIndex;
+procedure TMainForm.DBtreeFocusChanging(Sender: TBaseVirtualTree; OldNode,
+
+  NewNode: PVirtualNode; OldColumn, NewColumn: TColumnIndex;
+
   var Allowed: Boolean);
 var
-  OldDbObj, NewDbObj: PDBObject;
-  NewConnectionName, ConfirmMsg, PromptKey: String;
-begin
-  // Check if some editor has unsaved changes
-  if Assigned(ActiveObjectEditor) and Assigned(NewNode) and (NewNode <> OldNode) and (not FTreeRefreshInProgress) then begin
-    Allowed := not (ActiveObjectEditor.DeInit in [mrAbort, mrCancel]);
-    DBTree.Selected[DBTree.FocusedNode] := not Allowed;
-    if not Allowed then
-      Exit;
+  CurrentConnection, NewConnection: TDBConnection;
+  NewDbObj: PDBObject;
+  NewConnectionName, ConfirmMsg, PromptKey: String;
+
+begin
+
+  // Check if some editor has unsaved changes
+
+  if Assigned(ActiveObjectEditor) and Assigned(NewNode) and (NewNode <> OldNode) and (not FTreeRefreshInProgress) then begin
+
+    Allowed := not (ActiveObjectEditor.DeInit in [mrAbort, mrCancel]);
+
+    DBTree.Selected[DBTree.FocusedNode] := not Allowed;
+
+    if not Allowed then
+
+      Exit;
+
   end else
     Allowed := NewNode <> OldNode;
   if Allowed and Assigned(NewNode) and (NewNode <> OldNode) and (not FTreeRefreshInProgress) then
     Allowed := EnsureGridChangesPosted(ActiveGrid, _('changing the selected object'));
 
   if Allowed and Assigned(NewNode) and (NewNode <> OldNode) and (not FTreeRefreshInProgress) then begin
-    OldDbObj := nil;
+    CurrentConnection := ActiveConnection;
     NewDbObj := Sender.GetNodeData(NewNode);
-    if Assigned(OldNode) then
-      OldDbObj := Sender.GetNodeData(OldNode);
-    if Assigned(NewDbObj) and ((OldDbObj = nil) or (OldDbObj.Connection <> NewDbObj.Connection)) then begin
-      NewConnectionName := Trim(NewDbObj.Connection.Parameters.SessionName);
-      if NewConnectionName.IsEmpty then
-        NewConnectionName := Trim(NewDbObj.Connection.Parameters.SessionPath);
-      if NewConnectionName.IsEmpty then
-        NewConnectionName := Trim(NewDbObj.Connection.Parameters.Hostname);
-      PromptKey := '';
-      if Assigned(OldDbObj) then
-        PromptKey := Trim(OldDbObj.Connection.Parameters.SessionPath);
-      PromptKey := PromptKey + '->' + Trim(NewDbObj.Connection.Parameters.SessionPath);
+    if Assigned(NewDbObj) then
+      NewConnection := NewDbObj.Connection
+    else
+      NewConnection := nil;
+
+    if Assigned(CurrentConnection) and Assigned(NewConnection) and (CurrentConnection <> NewConnection) then begin
+      NewConnectionName := GetToolbarBaseDisplayName(NewConnection);
+      PromptKey := Trim(CurrentConnection.Parameters.SessionPath) + '->' + Trim(NewConnection.Parameters.SessionPath);
       // VirtualTree can fire two focus-change notifications for the same transition.
       if (PromptKey <> FLastConnectionSwitchPrompt) or (GetTickCount - FLastConnectionSwitchPromptTick > 1000) then begin
         ConfirmMsg := SqlMonitorTranslate('You are changing to the following connection:') + sLineBreak + sLineBreak +
@@ -10320,8 +10379,11 @@ begin
         Allowed := MessageDialog(SqlMonitorTranslate('Change connection'), ConfirmMsg, mtWarning, [mbYes, mbCancel]) = mrYes;
         FLastConnectionSwitchPrompt := PromptKey;
         FLastConnectionSwitchPromptTick := GetTickCount;
+        FLastConnectionSwitchPromptAllowed := Allowed;
+      end else begin
+        Allowed := FLastConnectionSwitchPromptAllowed;
       end;
-     end;
+    end;
   end;
 end;
 

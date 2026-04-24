@@ -296,18 +296,20 @@ begin
     Result := 'AMBIENTE DE PRODUCAO'
   else if SameText(MsgId, 'The following target will receive this SQL write:') then
     Result := 'A escrita SQL sera executada no seguinte destino:'
-  else if SameText(MsgId, 'API approval confirmed this production write. Do you want to execute it now?') then
-    Result := 'A API confirmou esta escrita em producao. Deseja executar agora?'
+  else if SameText(MsgId, 'Central validation confirmed this production write. Do you want to execute it now?') then
+    Result := 'A validacao central confirmou esta escrita em producao. Deseja executar agora?'
   else if SameText(MsgId, 'Confirm production execution') then
     Result := 'Confirmar execucao em producao'
-  else if SameText(MsgId, 'Production execution was cancelled by the user after API approval.') then
-    Result := 'A execucao em producao foi cancelada pelo usuario apos a aprovacao da API.'
+  else if SameText(MsgId, 'Production execution was cancelled by the user after central validation.') then
+    Result := 'A execucao em producao foi cancelada pelo usuario apos a validacao central.'
   else if SameText(MsgId, 'Change connection') then
     Result := 'Alterar conexao'
   else if SameText(MsgId, 'You are changing to the following connection:') then
     Result := 'Voce esta mudando para a seguinte conexao:'
   else if SameText(MsgId, 'Do you want to continue?') then
     Result := 'Deseja continuar?'
+  else if SameText(MsgId, 'Assessoria Base: %s') then
+    Result := 'Assessoria Base: %s'
   else if SameText(MsgId, 'Another HeidiSQL instance is already running. Close the other window before installing the update.') then
     Result := 'Outra instancia do HeidiSQL ja esta em execucao. Feche a outra janela antes de instalar a atualizacao.'
   else if SameText(MsgId, 'HeidiSQL CSLOG update was blocked because another HeidiSQL window is open. This window will be closed now.') then
@@ -1662,14 +1664,14 @@ begin
           Client.WaitForDecision(RequestId, Response);
         end;
 
-        if HasGuardedWrites and SqlMonitorIsProductionTarget(Connection) and (Response.Status = smbsApproved) then begin
+        if HasWrites and SqlMonitorIsProductionTarget(Connection) and (Response.Status in [smbsLogged, smbsApproved]) then begin
           DecisionMsg := Format('%s'#13#10#13#10'%s',
-            [SqlMonitorTranslate('API approval confirmed this production write. Do you want to execute it now?'),
+            [SqlMonitorTranslate('Central validation confirmed this production write. Do you want to execute it now?'),
              SqlMonitorTargetDisplayName(Connection)]);
           if MessageDialog(SqlMonitorTranslate('Confirm production execution'), DecisionMsg, mtWarning, [mbYes, mbCancel]) <> mrYes then begin
             if Assigned(MainForm) then
               MainForm.LogSQL(SqlMonitorTranslate('SQL monitor blocked execution: ') +
-                SqlMonitorTranslate('Production execution was cancelled by the user after API approval.'), lcError, Connection);
+                SqlMonitorTranslate('Production execution was cancelled by the user after central validation.'), lcError, Connection);
             Result := False;
             Exit;
           end;

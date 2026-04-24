@@ -1775,6 +1775,19 @@ object MainForm: TMainForm
         Action = actCancelOperation
       end
     end
+    object lblToolbarBase: TLabel
+      Left = 792
+      Top = 4
+      Width = 64
+      Height = 15
+      AutoSize = False
+      Caption = ''
+      EllipsisPosition = epEndEllipsis
+      ParentShowHint = False
+      ShowHint = True
+      Transparent = True
+      Layout = tlCenter
+    end
     object ToolBarDonate: TToolBar
       Left = 863
       Top = 2
