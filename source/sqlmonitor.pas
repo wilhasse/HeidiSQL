@@ -130,6 +130,7 @@ function SqlMonitorGetApiKey: String;
 procedure SqlMonitorClearCentralAuthSession;
 function SqlMonitorGetDecisionMessage(Response: TSqlMonitorBatchResponse): String;
 function SqlMonitorTranslate(const MsgId: String): String;
+function SqlMonitorIsProductionTarget(Connection: TDBConnection): Boolean;
 
 procedure SqlMonitorPrepareConnectionAuthentication(Connection: TDBConnection);
 procedure SqlMonitorRefreshConfiguration;
