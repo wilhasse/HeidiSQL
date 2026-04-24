@@ -414,10 +414,10 @@ begin
     Result := 'Escolha as cores de fundo das sessoes gerenciadas pela API por ambiente. "Nenhuma" mantem a cor especifica da sessao.'
   else if SameText(MsgId, 'Production') then
     Result := 'Producao'
-  else if SameText(MsgId, 'Replica (Espelho)') then
-    Result := 'Replica (Espelho)'
-  else if SameText(MsgId, 'Test (Teste)') then
-    Result := 'Teste (Teste)';
+  else if SameText(MsgId, 'Espelho') then
+    Result := 'Espelho'
+  else if SameText(MsgId, 'Teste') then
+    Result := 'Teste';
 end;
 
 

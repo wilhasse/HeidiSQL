@@ -358,7 +358,7 @@ begin
   lblManagedReplicaColor.Parent := tabCslogSessions;
   lblManagedReplicaColor.Left := 16;
   lblManagedReplicaColor.Top := TopPos + 4;
-  lblManagedReplicaColor.Caption := SqlMonitorTranslate('Replica (Espelho)');
+  lblManagedReplicaColor.Caption := SqlMonitorTranslate('Espelho');
 
   cboxManagedReplicaColor := TColorBox.Create(tabCslogSessions);
   cboxManagedReplicaColor.Parent := tabCslogSessions;
@@ -376,7 +376,7 @@ begin
   lblManagedTestColor.Parent := tabCslogSessions;
   lblManagedTestColor.Left := 16;
   lblManagedTestColor.Top := TopPos + 4;
-  lblManagedTestColor.Caption := SqlMonitorTranslate('Test (Teste)');
+  lblManagedTestColor.Caption := SqlMonitorTranslate('Teste');
 
   cboxManagedTestColor := TColorBox.Create(tabCslogSessions);
   cboxManagedTestColor.Parent := tabCslogSessions;

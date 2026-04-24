@@ -2849,6 +2849,13 @@ begin
   if not lblToolbarBase.Visible then
     Exit;
 
+  lblToolbarBase.Font.Style := [];
+  lblToolbarBase.Font.Color := clWindowText;
+  if Assigned(ActiveConnection) and SqlMonitorIsProductionTarget(ActiveConnection) then begin
+    lblToolbarBase.Font.Style := [fsBold];
+    lblToolbarBase.Font.Color := clRed;
+  end;
+
   LeftPos := ToolBarMainButtons.Left + ToolBarMainButtons.Width + 8;
   if ToolBarDonate.Visible then
     MaxWidth := ToolBarDonate.Left - LeftPos - 8
