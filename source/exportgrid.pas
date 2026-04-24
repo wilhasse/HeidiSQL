@@ -375,6 +375,8 @@ end;
 procedure TfrmExportGrid.editFilenameChange(Sender: TObject);
 begin
   radioOutputFile.Checked := True;
+  SetExportFormatByFilename;
+  ValidateControls(Sender);
 end;
 
 
