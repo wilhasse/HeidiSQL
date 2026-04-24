@@ -678,7 +678,7 @@ object connform: Tconnform
         Anchors = [akLeft, akTop, akRight]
         DropDownCount = 16
         TabOrder = 8
-        OnChange = Modification
+        OnChange = ColorBoxBackgroundColorChange
         OnGetColors = ColorBoxBackgroundColorGetColors
       end
       object editIgnoreDatabasePattern: TEdit

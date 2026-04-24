@@ -187,6 +187,7 @@ type
     procedure btnMoreClick(Sender: TObject);
     procedure menuRenameClick(Sender: TObject);
     procedure TimerButtonAnimationTimer(Sender: TObject);
+    procedure ColorBoxBackgroundColorChange(Sender: TObject);
     procedure ColorBoxBackgroundColorGetColors(Sender: TCustomColorBox;
       Items: TStrings);
     procedure editTrim(Sender: TObject);
@@ -236,6 +237,7 @@ type
     procedure WMNCLBUTTONDOWN(var Msg: TWMNCLButtonDown) ; message WM_NCLBUTTONDOWN;
     procedure WMNCLBUTTONUP(var Msg: TWMNCLButtonUp) ; message WM_NCLBUTTONUP;
     procedure RefreshBackgroundColors;
+    procedure SaveManagedSessionColor;
     property SelectedNetType: TNetType read GetSelectedNetType write SetSelectedNetType;
   public
     { Public declarations }
@@ -592,6 +594,36 @@ begin
   end;
 
   FSessionModified := False;
+  ListSessions.Invalidate;
+  RefreshBackgroundColors;
+  ValidateControls;
+end;
+
+
+procedure Tconnform.SaveManagedSessionColor;
+var
+  Sess: PConnectionParameters;
+  Conn: TDBConnection;
+begin
+  if (not CSLOG_BUILD) or (not Assigned(ListSessions.FocusedNode)) then
+    Exit;
+
+  Sess := ListSessions.GetNodeData(ListSessions.FocusedNode);
+  if Sess = nil then
+    Exit;
+
+  Sess.SessionColor := ColorBoxBackgroundColor.Selected;
+  Sess.SaveToRegistry;
+
+  for Conn in MainForm.Connections do begin
+    if Conn.Parameters.SessionPath = Sess.SessionPath then begin
+      Conn.Parameters.SessionColor := Sess.SessionColor;
+      MainForm.DBtree.Invalidate;
+    end;
+  end;
+
+  FSessionModified := False;
+  FOnlyPasswordModified := False;
   ListSessions.Invalidate;
   RefreshBackgroundColors;
   ValidateControls;
@@ -1417,6 +1449,19 @@ begin
   Modification(Sender);
 end;
 
+
+procedure Tconnform.ColorBoxBackgroundColorChange(Sender: TObject);
+begin
+  if not FLoaded then
+    Exit;
+
+  if CSLOG_BUILD then
+    SaveManagedSessionColor
+  else
+    Modification(Sender);
+end;
+
+
 procedure Tconnform.ColorBoxBackgroundColorGetColors(Sender: TCustomColorBox;
   Items: TStrings);
 var
@@ -1808,7 +1853,7 @@ begin
         updownPort.Enabled := False;
         chkCompressed.Enabled := False;
         editDatabases.Enabled := False;
-        ColorBoxBackgroundColor.Enabled := False;
+        ColorBoxBackgroundColor.Enabled := True;
         memoComment.Enabled := False;
         editStartupScript.Enabled := False;
         chkSSHActive.Enabled := False;
