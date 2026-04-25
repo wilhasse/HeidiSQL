@@ -524,6 +524,7 @@ end;
 function BuildDisplayName(Item: TSqlCatalogItem): String;
 var
   Parts: TStringList;
+  EnvironmentLabel: String;
 begin
   if not Trim(Item.DisplayName).IsEmpty then
     Exit(SanitizeSessionPathPart(Item.DisplayName));
@@ -533,10 +534,15 @@ begin
       Parts.Add(SanitizeSessionPathPart(Item.Customer));
     if not Trim(Item.BaseName).IsEmpty then
       Parts.Add(SanitizeSessionPathPart(Item.BaseName));
-    if not Trim(Item.EnvironmentName).IsEmpty then
-      Parts.Add(SanitizeSessionPathPart(Item.EnvironmentName));
-    if not Trim(Item.Qualifier).IsEmpty then
-      Parts.Add(SanitizeSessionPathPart(Item.Qualifier));
+    EnvironmentLabel := Trim(Item.EnvironmentName);
+    if SameText(EnvironmentLabel, 'Outro') and (not Trim(Item.Qualifier).IsEmpty) then
+      Parts.Add(SanitizeSessionPathPart(Format('%s (%s)', [EnvironmentLabel, Trim(Item.Qualifier)])))
+    else begin
+      if not EnvironmentLabel.IsEmpty then
+        Parts.Add(SanitizeSessionPathPart(EnvironmentLabel));
+      if not Trim(Item.Qualifier).IsEmpty then
+        Parts.Add(SanitizeSessionPathPart(Item.Qualifier));
+    end;
     Result := StringReplace(Trim(Parts.Text), sLineBreak, ' - ', [rfReplaceAll]);
     if Result.EndsWith(' - ') then
       Result := Result.Substring(0, Result.Length - 3);
