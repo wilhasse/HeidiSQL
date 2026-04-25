@@ -145,7 +145,7 @@ procedure SqlMonitorShowError(const Title, Msg: String);
 implementation
 
 uses
-  System.Math, System.DateUtils, Vcl.Controls, Vcl.StdCtrls, Vcl.Dialogs, Vcl.Graphics,
+  System.Math, System.DateUtils, System.IOUtils, Winapi.WinCrypt, Vcl.Controls, Vcl.StdCtrls, Vcl.Dialogs, Vcl.Graphics,
   apphelpers, gnugettext, Main;
 
 {$I const.inc}
@@ -214,7 +214,13 @@ var
   CachedCentralAuthExpiresAt: TDateTime;
   CachedCentralAuthToken: String;
   CachedCentralAuthUsername: String;
+  CentralAuthCacheRestoreAttempted: Boolean;
   CachedTicketInfo: TDictionary<String, TSqlMonitorTicketInfo>;
+
+function GetJsonString(Obj: TJSONObject; const Name: String; const DefaultValue: String=''): String; forward;
+function TryParseCentralAuthExpiration(const Value: String; out ParsedValue: TDateTime): Boolean; forward;
+procedure CenterFormOnActiveMonitor(AForm: TCustomForm); forward;
+procedure StoreCentralAuthSession(const Username, ActorId, AuthToken: String; ExpiresAt: TDateTime); forward;
 
 function SqlMonitorTranslate(const MsgId: String): String;
 var
@@ -352,6 +358,12 @@ begin
     Result := 'A autenticacao AD centralizada foi cancelada pelo usuario.'
   else if SameText(MsgId, 'Centralized AD session expired. Sign in again to continue.') then
     Result := 'A sessao AD centralizada expirou. Entre novamente para continuar.'
+  else if SameText(MsgId, 'AD session reused automatically.') then
+    Result := 'Sessao AD reutilizada automaticamente.'
+  else if SameText(MsgId, 'Authenticated user: %s') then
+    Result := 'Usuario autenticado: %s'
+  else if SameText(MsgId, 'Valid until: %s') then
+    Result := 'Valida ate: %s'
   else if SameText(MsgId, 'Managed DB credentials were not returned by the central service.') then
     Result := 'A credencial gerenciada do banco nao foi retornada pelo servico central.'
   else if SameText(MsgId, 'Centralized AD login did not return an auth token.') then
@@ -512,6 +524,177 @@ begin
 end;
 
 
+function GetCentralAuthCacheFilePath: String;
+var
+  BaseDir: String;
+begin
+  BaseDir := Trim(GetEnvironmentVariable('APPDATA'));
+  if BaseDir.IsEmpty then
+    BaseDir := ExcludeTrailingPathDelimiter(ExtractFilePath(Application.ExeName));
+  Result := TPath.Combine(TPath.Combine(BaseDir, APPNAME), 'central_auth.dat');
+end;
+
+
+function ProtectBytesForCurrentUser(const PlainBytes: TBytes; out ProtectedBytes: TBytes): Boolean;
+var
+  InBlob, OutBlob: DATA_BLOB;
+begin
+  Result := False;
+  SetLength(ProtectedBytes, 0);
+  if Length(PlainBytes) = 0 then
+    Exit;
+
+  ZeroMemory(@InBlob, SizeOf(InBlob));
+  ZeroMemory(@OutBlob, SizeOf(OutBlob));
+  InBlob.cbData := Length(PlainBytes);
+  InBlob.pbData := @PlainBytes[0];
+  if not CryptProtectData(@InBlob, nil, nil, nil, nil, CRYPTPROTECT_UI_FORBIDDEN, @OutBlob) then
+    Exit;
+  try
+    SetLength(ProtectedBytes, OutBlob.cbData);
+    if OutBlob.cbData > 0 then
+      Move(OutBlob.pbData^, ProtectedBytes[0], OutBlob.cbData);
+    Result := True;
+  finally
+    if OutBlob.pbData <> nil then
+      LocalFree(HLOCAL(OutBlob.pbData));
+  end;
+end;
+
+
+function UnprotectBytesForCurrentUser(const ProtectedBytes: TBytes; out PlainBytes: TBytes): Boolean;
+var
+  InBlob, OutBlob: DATA_BLOB;
+begin
+  Result := False;
+  SetLength(PlainBytes, 0);
+  if Length(ProtectedBytes) = 0 then
+    Exit;
+
+  ZeroMemory(@InBlob, SizeOf(InBlob));
+  ZeroMemory(@OutBlob, SizeOf(OutBlob));
+  InBlob.cbData := Length(ProtectedBytes);
+  InBlob.pbData := @ProtectedBytes[0];
+  if not CryptUnprotectData(@InBlob, nil, nil, nil, nil, CRYPTPROTECT_UI_FORBIDDEN, @OutBlob) then
+    Exit;
+  try
+    SetLength(PlainBytes, OutBlob.cbData);
+    if OutBlob.cbData > 0 then
+      Move(OutBlob.pbData^, PlainBytes[0], OutBlob.cbData);
+    Result := True;
+  finally
+    if OutBlob.pbData <> nil then
+      LocalFree(HLOCAL(OutBlob.pbData));
+  end;
+end;
+
+
+procedure DeleteCentralAuthSessionCache;
+var
+  CacheFilePath: String;
+begin
+  CacheFilePath := GetCentralAuthCacheFilePath;
+  if FileExists(CacheFilePath) then
+    SysUtils.DeleteFile(CacheFilePath);
+end;
+
+
+procedure SaveCentralAuthSessionCache(const Username, ActorId, AuthToken: String; ExpiresAt: TDateTime);
+var
+  CacheJson: TJSONObject;
+  CacheFilePath: String;
+  PlainBytes, ProtectedBytes: TBytes;
+begin
+  if Trim(AuthToken).IsEmpty then
+    Exit;
+
+  CacheJson := TJSONObject.Create;
+  try
+    CacheJson.AddPair('username', Trim(Username));
+    CacheJson.AddPair('actor_id', Trim(ActorId));
+    CacheJson.AddPair('auth_token', Trim(AuthToken));
+    CacheJson.AddPair('expires_at', DateToISO8601(ExpiresAt, False));
+    PlainBytes := TEncoding.UTF8.GetBytes(CacheJson.ToJSON);
+  finally
+    CacheJson.Free;
+  end;
+
+  if not ProtectBytesForCurrentUser(PlainBytes, ProtectedBytes) then
+    Exit;
+
+  CacheFilePath := GetCentralAuthCacheFilePath;
+  TDirectory.CreateDirectory(ExtractFileDir(CacheFilePath));
+  TFile.WriteAllBytes(CacheFilePath, ProtectedBytes);
+end;
+
+
+function TryLoadCentralAuthSessionCache(out Username, ActorId, AuthToken: String; out ExpiresAt: TDateTime): Boolean;
+var
+  CacheFilePath, ExpiresText, JsonText: String;
+  ProtectedBytes, PlainBytes: TBytes;
+  RootValue: TJSONValue;
+  RootObject: TJSONObject;
+begin
+  Result := False;
+  Username := '';
+  ActorId := '';
+  AuthToken := '';
+  ExpiresAt := 0;
+
+  CacheFilePath := GetCentralAuthCacheFilePath;
+  if not FileExists(CacheFilePath) then
+    Exit;
+
+  try
+    ProtectedBytes := TFile.ReadAllBytes(CacheFilePath);
+    if not UnprotectBytesForCurrentUser(ProtectedBytes, PlainBytes) then begin
+      DeleteCentralAuthSessionCache;
+      Exit;
+    end;
+    JsonText := TEncoding.UTF8.GetString(PlainBytes);
+    RootValue := TJSONObject.ParseJSONValue(JsonText);
+    if not (RootValue is TJSONObject) then begin
+      RootValue.Free;
+      DeleteCentralAuthSessionCache;
+      Exit;
+    end;
+    RootObject := RootValue as TJSONObject;
+    try
+      Username := GetJsonString(RootObject, 'username');
+      ActorId := GetJsonString(RootObject, 'actor_id');
+      AuthToken := GetJsonString(RootObject, 'auth_token');
+      ExpiresText := GetJsonString(RootObject, 'expires_at');
+      Result := (not AuthToken.IsEmpty) and TryParseCentralAuthExpiration(ExpiresText, ExpiresAt);
+    finally
+      RootValue.Free;
+    end;
+  except
+    DeleteCentralAuthSessionCache;
+    Result := False;
+  end;
+end;
+
+
+function ShouldReuseCentralAuthCache(ExpiresAt: TDateTime): Boolean;
+begin
+  Result := (ExpiresAt > 0) and (ExpiresAt > IncSecond(Now, 60));
+end;
+
+
+function GetCurrentWindowsUsername: String;
+var
+  UserBufferSize: DWORD;
+begin
+  UserBufferSize := 512;
+  SetLength(Result, UserBufferSize);
+  if GetUserName(PChar(Result), UserBufferSize) then
+    SetLength(Result, UserBufferSize-1)
+  else
+    Result := Trim(GetEnvironmentVariable('USERNAME'));
+  Result := Trim(Result);
+end;
+
+
 function GetCurrentCentralAuthUsername: String;
 begin
   System.TMonitor.Enter(SqlMonitorAuthLock);
@@ -520,6 +703,8 @@ begin
   finally
     System.TMonitor.Exit(SqlMonitorAuthLock);
   end;
+  if Result.IsEmpty then
+    Result := GetCurrentWindowsUsername;
 end;
 
 
@@ -531,6 +716,69 @@ begin
   finally
     System.TMonitor.Exit(SqlMonitorAuthLock);
   end;
+end;
+
+
+procedure ShowCentralAuthReuseStatus(const Username: String; ExpiresAt: TDateTime);
+var
+  Dialog: TForm;
+  InfoLabel: TLabel;
+begin
+  Dialog := TForm.CreateNew(MainForm);
+  try
+    Dialog.Caption := SqlMonitorTranslate('Centralized AD authentication');
+    Dialog.BorderStyle := bsDialog;
+    Dialog.BorderIcons := [];
+    Dialog.Position := poDesigned;
+    Dialog.ClientWidth := 430;
+    Dialog.ClientHeight := 110;
+
+    InfoLabel := TLabel.Create(Dialog);
+    InfoLabel.Parent := Dialog;
+    InfoLabel.Left := 16;
+    InfoLabel.Top := 16;
+    InfoLabel.Width := Dialog.ClientWidth - 32;
+    InfoLabel.Height := Dialog.ClientHeight - 32;
+    InfoLabel.AutoSize := False;
+    InfoLabel.WordWrap := True;
+    InfoLabel.Caption := SqlMonitorTranslate('AD session reused automatically.') + sLineBreak
+      + Format(SqlMonitorTranslate('Authenticated user: %s'), [Username]) + sLineBreak
+      + Format(SqlMonitorTranslate('Valid until: %s'), [DateTimeToStr(ExpiresAt)]);
+
+    CenterFormOnActiveMonitor(Dialog);
+    Dialog.Show;
+    Dialog.Update;
+    Application.ProcessMessages;
+    Sleep(1800);
+  finally
+    Dialog.Free;
+    Application.ProcessMessages;
+  end;
+end;
+
+
+function TryRestoreCentralAuthSessionFromCache(ShowStatus: Boolean=False): Boolean;
+var
+  Username, ActorId, AuthToken: String;
+  ExpiresAt: TDateTime;
+begin
+  if HasValidCentralAuthToken then
+    Exit(True);
+  if CentralAuthCacheRestoreAttempted then
+    Exit(False);
+
+  CentralAuthCacheRestoreAttempted := True;
+  if not TryLoadCentralAuthSessionCache(Username, ActorId, AuthToken, ExpiresAt) then
+    Exit(False);
+  if (Trim(AuthToken).IsEmpty) or (Trim(ActorId).IsEmpty) or (not ShouldReuseCentralAuthCache(ExpiresAt)) then begin
+    DeleteCentralAuthSessionCache;
+    Exit(False);
+  end;
+
+  StoreCentralAuthSession(Username, ActorId, AuthToken, ExpiresAt);
+  Result := HasValidCentralAuthToken;
+  if Result and ShowStatus then
+    ShowCentralAuthReuseStatus(GetCurrentCentralAuthUsername, ExpiresAt);
 end;
 
 
@@ -547,6 +795,7 @@ begin
   finally
     System.TMonitor.Exit(SqlMonitorAuthLock);
   end;
+  DeleteCentralAuthSessionCache;
   ClearCachedTicketNumbers;
 end;
 
@@ -561,6 +810,11 @@ begin
     CachedCentralAuthExpiresAt := ExpiresAt;
   finally
     System.TMonitor.Exit(SqlMonitorAuthLock);
+  end;
+  try
+    SaveCentralAuthSessionCache(Username, ActorId, AuthToken, ExpiresAt);
+  except
+    // Do not block login if local token caching fails.
   end;
 end;
 
@@ -1250,6 +1504,8 @@ begin
       SqlMonitorTranslate('Centralized AD authentication is enabled, but the SQL monitor URL or API key is missing.'));
     Exit(False);
   end;
+  if TryRestoreCentralAuthSessionFromCache(True) then
+    Exit(True);
   if HasValidCentralAuthToken then
     Exit(True);
   Result := PromptForCentralAuthSession('');
@@ -1258,6 +1514,8 @@ end;
 
 function SqlMonitorEnsureCentralAuthSession(const InitialError: String=''): Boolean;
 begin
+  if TryRestoreCentralAuthSessionFromCache(False) then
+    Exit(True);
   if HasValidCentralAuthToken then
     Exit(True);
   Result := PromptForCentralAuthSession(InitialError);
@@ -1299,7 +1557,7 @@ begin
     Exit;
   if not TSqlMonitorClient.IsConfigured then
     raise ESqlMonitorError.Create(SqlMonitorTranslate('Centralized AD authentication is enabled, but the SQL monitor URL or API key is missing.'));
-  if not HasValidCentralAuthToken then begin
+  if (not HasValidCentralAuthToken) and (not TryRestoreCentralAuthSessionFromCache(False)) then begin
     if not PromptForCentralAuthSession('') then
       raise ESqlMonitorError.Create(SqlMonitorTranslate('Centralized AD authentication was cancelled by the user.'));
   end;
@@ -1632,7 +1890,7 @@ var
   Client: TSqlMonitorClient;
   Response: TSqlMonitorBatchResponse;
   HasGuardedWrites, HasWrites: Boolean;
-  DecisionMsg, RequestId, TicketNumber, ErrorTitle: String;
+  DecisionMsg, RequestId, TicketNumber, ErrorTitle, ConfirmationTitle, CancelMessage: String;
 begin
   Result := True;
   Context := nil;
@@ -1688,17 +1946,16 @@ begin
             DecisionMsg := Format('%s'#13#10#13#10'%s',
               [SqlMonitorTranslate('Central validation confirmed this write. Do you want to execute it now?'),
                SqlMonitorTargetDisplayName(Connection)]);
-          if MessageDialog(
-            IfThen(SqlMonitorIsProductionTarget(Connection),
-              SqlMonitorTranslate('Confirm production execution'),
-              SqlMonitorTranslate('Confirm write execution')),
-            DecisionMsg, mtWarning, [mbYes, mbCancel]) <> mrYes then begin
+          if SqlMonitorIsProductionTarget(Connection) then begin
+            ConfirmationTitle := SqlMonitorTranslate('Confirm production execution');
+            CancelMessage := SqlMonitorTranslate('Production execution was cancelled by the user after central validation.');
+          end else begin
+            ConfirmationTitle := SqlMonitorTranslate('Confirm write execution');
+            CancelMessage := SqlMonitorTranslate('Write execution was cancelled by the user after central validation.');
+          end;
+          if MessageDialog(ConfirmationTitle, DecisionMsg, mtWarning, [mbYes, mbCancel]) <> mrYes then begin
             if Assigned(MainForm) then
-              MainForm.LogSQL(SqlMonitorTranslate('SQL monitor blocked execution: ') +
-                IfThen(SqlMonitorIsProductionTarget(Connection),
-                  SqlMonitorTranslate('Production execution was cancelled by the user after central validation.'),
-                  SqlMonitorTranslate('Write execution was cancelled by the user after central validation.')),
-                lcError, Connection);
+              MainForm.LogSQL(SqlMonitorTranslate('SQL monitor blocked execution: ') + CancelMessage, lcError, Connection);
             Result := False;
             Exit;
           end;
