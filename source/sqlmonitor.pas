@@ -1519,6 +1519,11 @@ begin
 
       CenterFormOnActiveMonitor(Dialog);
       Result := Dialog.ShowModal = mrOk;
+      if (not Result) and (Trim(InitialError) <> '') then begin
+        if Assigned(MainForm) then
+          MainForm.Close;
+        Application.Terminate;
+      end;
     finally
       DialogState.Free;
     end;
