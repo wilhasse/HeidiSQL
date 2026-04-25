@@ -113,7 +113,7 @@ type
     function CompleteRequest(Connection: TDBConnection; Context: TSqlMonitorExecutionContext; TotalDurationMs: Cardinal): Boolean;
     function CreateRequest(Connection: TDBConnection; StatementSql: TStrings; const TicketNumber: String=''): TSqlMonitorBatchResponse;
     function GetRequestStatus(const RequestId: String): TSqlMonitorBatchResponse;
-    function LoginCentralAuth(const Username, Password: String; out ActorId, AuthToken: String; out ExpiresAt: TDateTime): Boolean;
+    function LoginCentralAuth(const Username, Password: String; out ActorId, AuthToken: String; out ExpiresAt, CacheReuseUntil: TDateTime): Boolean;
     function LookupTicket(Connection: TDBConnection; const TicketNumber: String; out TicketTitle, TicketStatus: String): Boolean;
     function RegisterSession(Connection: TDBConnection; const DatabaseName: String): Boolean;
     function ResolveDbCredentials(Connection: TDBConnection): TSqlMonitorCredentialResponse;
@@ -218,6 +218,7 @@ var
   CachedSqlMonitorCentralAuthEnabled: Boolean;
   CachedCentralAuthActorId: String;
   CachedCentralAuthExpiresAt: TDateTime;
+  CachedCentralAuthCacheReuseUntil: TDateTime;
   CachedCentralAuthToken: String;
   CachedCentralAuthUsername: String;
   CentralAuthCacheRestoreAttempted: Boolean;
@@ -236,7 +237,7 @@ function CryptUnprotectData(pDataIn: PDATA_BLOB; ppszDataDescr: Pointer; pOption
 function GetJsonString(Obj: TJSONObject; const Name: String; const DefaultValue: String=''): String; forward;
 function TryParseCentralAuthExpiration(const Value: String; out ParsedValue: TDateTime): Boolean; forward;
 procedure CenterFormOnActiveMonitor(AForm: TCustomForm); forward;
-procedure StoreCentralAuthSession(const Username, ActorId, AuthToken: String; ExpiresAt: TDateTime); forward;
+procedure StoreCentralAuthSession(const Username, ActorId, AuthToken: String; ExpiresAt: TDateTime; CacheReuseUntil: TDateTime=0); forward;
 
 function SqlMonitorTranslate(const MsgId: String): String;
 var
@@ -378,8 +379,8 @@ begin
     Result := 'Sessao AD reutilizada automaticamente.'
   else if SameText(MsgId, 'Authenticated user: %s') then
     Result := 'Usuario autenticado: %s'
-  else if SameText(MsgId, 'Valid until: %s') then
-    Result := 'Valida ate: %s'
+  else if SameText(MsgId, 'Automatic reuse until: %s') then
+    Result := 'Reutilizacao automatica ate: %s'
   else if SameText(MsgId, 'Managed DB credentials were not returned by the central service.') then
     Result := 'A credencial gerenciada do banco nao foi retornada pelo servico central.'
   else if SameText(MsgId, 'Centralized AD login did not return an auth token.') then
@@ -615,7 +616,7 @@ begin
 end;
 
 
-procedure SaveCentralAuthSessionCache(const Username, ActorId, AuthToken: String; ExpiresAt: TDateTime);
+procedure SaveCentralAuthSessionCache(const Username, ActorId, AuthToken: String; ExpiresAt, CacheReuseUntil: TDateTime);
 var
   CacheJson: TJSONObject;
   CacheFilePath: String;
@@ -630,6 +631,8 @@ begin
     CacheJson.AddPair('actor_id', Trim(ActorId));
     CacheJson.AddPair('auth_token', Trim(AuthToken));
     CacheJson.AddPair('expires_at', DateToISO8601(ExpiresAt, False));
+    if CacheReuseUntil > 0 then
+      CacheJson.AddPair('cache_reuse_until', DateToISO8601(CacheReuseUntil, False));
     PlainBytes := TEncoding.UTF8.GetBytes(CacheJson.ToJSON);
   finally
     CacheJson.Free;
@@ -644,9 +647,9 @@ begin
 end;
 
 
-function TryLoadCentralAuthSessionCache(out Username, ActorId, AuthToken: String; out ExpiresAt: TDateTime): Boolean;
+function TryLoadCentralAuthSessionCache(out Username, ActorId, AuthToken: String; out ExpiresAt, CacheReuseUntil: TDateTime): Boolean;
 var
-  CacheFilePath, ExpiresText, JsonText: String;
+  CacheFilePath, ExpiresText, CacheReuseText, JsonText: String;
   ProtectedBytes, PlainBytes: TBytes;
   RootValue: TJSONValue;
   RootObject: TJSONObject;
@@ -656,6 +659,7 @@ begin
   ActorId := '';
   AuthToken := '';
   ExpiresAt := 0;
+  CacheReuseUntil := 0;
 
   CacheFilePath := GetCentralAuthCacheFilePath;
   if not FileExists(CacheFilePath) then
@@ -680,7 +684,12 @@ begin
       ActorId := GetJsonString(RootObject, 'actor_id');
       AuthToken := GetJsonString(RootObject, 'auth_token');
       ExpiresText := GetJsonString(RootObject, 'expires_at');
+      CacheReuseText := GetJsonString(RootObject, 'cache_reuse_until');
       Result := (not AuthToken.IsEmpty) and TryParseCentralAuthExpiration(ExpiresText, ExpiresAt);
+      if Result and (not CacheReuseText.IsEmpty) then
+        Result := TryParseCentralAuthExpiration(CacheReuseText, CacheReuseUntil);
+      if Result and (CacheReuseUntil <= 0) then
+        CacheReuseUntil := ExpiresAt;
     finally
       RootValue.Free;
     end;
@@ -691,9 +700,14 @@ begin
 end;
 
 
-function ShouldReuseCentralAuthCache(ExpiresAt: TDateTime): Boolean;
+function ShouldReuseCentralAuthCache(ExpiresAt, CacheReuseUntil: TDateTime): Boolean;
+var
+  EffectiveReuseUntil: TDateTime;
 begin
-  Result := (ExpiresAt > 0) and (ExpiresAt > IncSecond(Now, 60));
+  EffectiveReuseUntil := CacheReuseUntil;
+  if EffectiveReuseUntil <= 0 then
+    EffectiveReuseUntil := ExpiresAt;
+  Result := (ExpiresAt > 0) and (EffectiveReuseUntil > IncSecond(Now, 60));
 end;
 
 
@@ -735,7 +749,7 @@ begin
 end;
 
 
-procedure ShowCentralAuthReuseStatus(const Username: String; ExpiresAt: TDateTime);
+procedure ShowCentralAuthReuseStatus(const Username: String; CacheReuseUntil: TDateTime);
 var
   Dialog: TForm;
   InfoLabel: TLabel;
@@ -759,7 +773,7 @@ begin
     InfoLabel.WordWrap := True;
     InfoLabel.Caption := SqlMonitorTranslate('AD session reused automatically.') + sLineBreak
       + Format(SqlMonitorTranslate('Authenticated user: %s'), [Username]) + sLineBreak
-      + Format(SqlMonitorTranslate('Valid until: %s'), [DateTimeToStr(ExpiresAt)]);
+      + Format(SqlMonitorTranslate('Automatic reuse until: %s'), [DateTimeToStr(CacheReuseUntil)]);
 
     CenterFormOnActiveMonitor(Dialog);
     Dialog.Show;
@@ -776,7 +790,7 @@ end;
 function TryRestoreCentralAuthSessionFromCache(ShowStatus: Boolean=False): Boolean;
 var
   Username, ActorId, AuthToken: String;
-  ExpiresAt: TDateTime;
+  ExpiresAt, CacheReuseUntil: TDateTime;
 begin
   if HasValidCentralAuthToken then
     Exit(True);
@@ -784,17 +798,17 @@ begin
     Exit(False);
 
   CentralAuthCacheRestoreAttempted := True;
-  if not TryLoadCentralAuthSessionCache(Username, ActorId, AuthToken, ExpiresAt) then
+  if not TryLoadCentralAuthSessionCache(Username, ActorId, AuthToken, ExpiresAt, CacheReuseUntil) then
     Exit(False);
-  if (Trim(AuthToken).IsEmpty) or (Trim(ActorId).IsEmpty) or (not ShouldReuseCentralAuthCache(ExpiresAt)) then begin
+  if (Trim(AuthToken).IsEmpty) or (Trim(ActorId).IsEmpty) or (not ShouldReuseCentralAuthCache(ExpiresAt, CacheReuseUntil)) then begin
     DeleteCentralAuthSessionCache;
     Exit(False);
   end;
 
-  StoreCentralAuthSession(Username, ActorId, AuthToken, ExpiresAt);
+  StoreCentralAuthSession(Username, ActorId, AuthToken, ExpiresAt, CacheReuseUntil);
   Result := HasValidCentralAuthToken;
   if Result and ShowStatus then
-    ShowCentralAuthReuseStatus(GetCurrentCentralAuthUsername, ExpiresAt);
+    ShowCentralAuthReuseStatus(GetCurrentCentralAuthUsername, CacheReuseUntil);
 end;
 
 
@@ -805,6 +819,7 @@ begin
   System.TMonitor.Enter(SqlMonitorAuthLock);
   try
     CachedCentralAuthActorId := '';
+    CachedCentralAuthCacheReuseUntil := 0;
     CachedCentralAuthExpiresAt := 0;
     CachedCentralAuthToken := '';
     CachedCentralAuthUsername := '';
@@ -816,19 +831,22 @@ begin
 end;
 
 
-procedure StoreCentralAuthSession(const Username, ActorId, AuthToken: String; ExpiresAt: TDateTime);
+procedure StoreCentralAuthSession(const Username, ActorId, AuthToken: String; ExpiresAt: TDateTime; CacheReuseUntil: TDateTime=0);
 begin
+  if (CacheReuseUntil <= 0) or (CacheReuseUntil > ExpiresAt) then
+    CacheReuseUntil := ExpiresAt;
   System.TMonitor.Enter(SqlMonitorAuthLock);
   try
     CachedCentralAuthUsername := Trim(Username);
     CachedCentralAuthActorId := Trim(ActorId);
     CachedCentralAuthToken := Trim(AuthToken);
     CachedCentralAuthExpiresAt := ExpiresAt;
+    CachedCentralAuthCacheReuseUntil := CacheReuseUntil;
   finally
     System.TMonitor.Exit(SqlMonitorAuthLock);
   end;
   try
-    SaveCentralAuthSessionCache(Username, ActorId, AuthToken, ExpiresAt);
+    SaveCentralAuthSessionCache(Username, ActorId, AuthToken, ExpiresAt, CacheReuseUntil);
   except
     // Do not block login if local token caching fails.
   end;
@@ -2506,9 +2524,9 @@ begin
 end;
 
 
-function TSqlMonitorClient.LoginCentralAuth(const Username, Password: String; out ActorId, AuthToken: String; out ExpiresAt: TDateTime): Boolean;
+function TSqlMonitorClient.LoginCentralAuth(const Username, Password: String; out ActorId, AuthToken: String; out ExpiresAt, CacheReuseUntil: TDateTime): Boolean;
 var
-  ResponseText, ExpiresText: String;
+  ResponseText, ExpiresText, CacheReuseText: String;
   RootValue: TJSONValue;
   RootObject: TJSONObject;
 begin
@@ -2516,6 +2534,7 @@ begin
   ActorId := '';
   AuthToken := '';
   ExpiresAt := 0;
+  CacheReuseUntil := 0;
 
   SendJsonRequest(BaseUrl + '/v1/auth/login', 'POST', BuildAuthLoginPayload(Username, Password), ResponseText, SessionTimeoutSeconds);
   RootValue := TJSONObject.ParseJSONValue(ResponseText);
@@ -2535,6 +2554,11 @@ begin
     ExpiresText := GetJsonString(RootObject, 'expires_at');
     if not TryParseCentralAuthExpiration(ExpiresText, ExpiresAt) then
       ExpiresAt := IncHour(Now, 8);
+    CacheReuseText := GetJsonString(RootObject, 'cache_reuse_until');
+    if not CacheReuseText.IsEmpty then
+      TryParseCentralAuthExpiration(CacheReuseText, CacheReuseUntil);
+    if (CacheReuseUntil <= 0) or (CacheReuseUntil > ExpiresAt) then
+      CacheReuseUntil := Min(ExpiresAt, IncHour(Now, 4));
     Result := True;
   finally
     RootValue.Free;
@@ -3015,7 +3039,7 @@ procedure TSqlMonitorCentralAuthDialogState.HandleCloseQuery(Sender: TObject; va
 var
   Client: TSqlMonitorClient;
   ActorId, AuthToken: String;
-  ExpiresAt: TDateTime;
+  ExpiresAt, CacheReuseUntil: TDateTime;
 begin
   if FDialog.ModalResult <> mrOk then begin
     CanClose := True;
@@ -3026,8 +3050,8 @@ begin
   Client := TSqlMonitorClient.Create(FDialog);
   try
     try
-      if Client.LoginCentralAuth(Trim(FUserEdit.Text), FPasswordEdit.Text, ActorId, AuthToken, ExpiresAt) then begin
-        StoreCentralAuthSession(Trim(FUserEdit.Text), ActorId, AuthToken, ExpiresAt);
+      if Client.LoginCentralAuth(Trim(FUserEdit.Text), FPasswordEdit.Text, ActorId, AuthToken, ExpiresAt, CacheReuseUntil) then begin
+        StoreCentralAuthSession(Trim(FUserEdit.Text), ActorId, AuthToken, ExpiresAt, CacheReuseUntil);
         SetError('');
         CanClose := True;
       end;
