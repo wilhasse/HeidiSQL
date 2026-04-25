@@ -258,9 +258,11 @@ type
     lblManagedProdColor: TLabel;
     lblManagedReplicaColor: TLabel;
     lblManagedTestColor: TLabel;
+    lblManagedOtherColor: TLabel;
     cboxManagedProdColor: TColorBox;
     cboxManagedReplicaColor: TColorBox;
     cboxManagedTestColor: TColorBox;
+    cboxManagedOtherColor: TColorBox;
     procedure InitLanguages;
     procedure CreateManagedSessionsTab;
     procedure SelectDirectory(Sender: TObject; NewFolderButton: Boolean);
@@ -387,6 +389,24 @@ begin
   cboxManagedTestColor.Style := ColorBoxStyle;
   cboxManagedTestColor.NoneColorColor := clNone;
   cboxManagedTestColor.OnChange := Modified;
+
+  Inc(TopPos, 32);
+
+  lblManagedOtherColor := TLabel.Create(tabCslogSessions);
+  lblManagedOtherColor.Parent := tabCslogSessions;
+  lblManagedOtherColor.Left := 16;
+  lblManagedOtherColor.Top := TopPos + 4;
+  lblManagedOtherColor.Caption := SqlMonitorTranslate('Outro');
+
+  cboxManagedOtherColor := TColorBox.Create(tabCslogSessions);
+  cboxManagedOtherColor.Parent := tabCslogSessions;
+  cboxManagedOtherColor.Left := 220;
+  cboxManagedOtherColor.Top := TopPos;
+  cboxManagedOtherColor.Width := 320;
+  cboxManagedOtherColor.Anchors := [akLeft, akTop, akRight];
+  cboxManagedOtherColor.Style := ColorBoxStyle;
+  cboxManagedOtherColor.NoneColorColor := clNone;
+  cboxManagedOtherColor.OnChange := Modified;
 end;
 
 
@@ -479,6 +499,7 @@ begin
     AppSettings.WriteInt(asManagedColorProduction, cboxManagedProdColor.Selected);
     AppSettings.WriteInt(asManagedColorReplica, cboxManagedReplicaColor.Selected);
     AppSettings.WriteInt(asManagedColorTest, cboxManagedTestColor.Selected);
+    AppSettings.WriteInt(asManagedColorOther, cboxManagedOtherColor.Selected);
   end;
   SqlMonitorRefreshConfiguration;
 
@@ -876,6 +897,7 @@ begin
       cboxManagedProdColor.Selected := AppSettings.ReadInt(asManagedColorProduction);
       cboxManagedReplicaColor.Selected := AppSettings.ReadInt(asManagedColorReplica);
       cboxManagedTestColor.Selected := AppSettings.ReadInt(asManagedColorTest);
+      cboxManagedOtherColor.Selected := AppSettings.ReadInt(asManagedColorOther);
     end;
   finally
     AppSettings.RestorePath;

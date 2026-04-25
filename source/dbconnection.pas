@@ -2127,6 +2127,10 @@ begin
 end;
 
 
+
+
+
+
 function TConnectionParameters.UsesManagedEnvironmentColor: Boolean;
 var
   OverrideColor: TColor;
@@ -2136,6 +2140,8 @@ begin
     OverrideColor := AppSettings.ReadInt(asManagedColorTest)
   else if IsManagedReplicaTarget then
     OverrideColor := AppSettings.ReadInt(asManagedColorReplica)
+  else if IsManagedOtherTarget then
+    OverrideColor := AppSettings.ReadInt(asManagedColorOther)
   else if IsManagedProductionTarget then
     OverrideColor := AppSettings.ReadInt(asManagedColorProduction);
   Result := OverrideColor <> clNone;
@@ -2152,6 +2158,10 @@ begin
   else if IsManagedReplicaTarget then begin
     if AppSettings.ReadInt(asManagedColorReplica) <> clNone then
       Result := AppSettings.ReadInt(asManagedColorReplica);
+  end
+  else if IsManagedOtherTarget then begin
+    if AppSettings.ReadInt(asManagedColorOther) <> clNone then
+      Result := AppSettings.ReadInt(asManagedColorOther);
   end
   else if IsManagedProductionTarget then begin
     if AppSettings.ReadInt(asManagedColorProduction) <> clNone then

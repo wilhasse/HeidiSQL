@@ -232,7 +232,7 @@ type
     asTabsToSpaces, asFilterPanel, asAllowMultipleInstances, asFindDialogSearchHistory, asGUIFontName, asGUIFontSize,
     asTheme, asIconPack, asWebSearchBaseUrl, asSqlMonitorUrl, asSqlMonitorApiKey, asSqlMonitorCentralAuthEnabled,
     asApiManaged, asApiConnectionId, asApiMatchHost, asApiMatchDatabase, asApiLastSyncAt, asApiArchived, asApiCustomer,
-    asManagedColorProduction, asManagedColorReplica, asManagedColorTest,
+    asManagedColorProduction, asManagedColorReplica, asManagedColorTest, asManagedColorOther,
     asFindDialogReplaceHistory, asMaxQueryResults, asLogErrors,
     asLogUserSQL, asLogSQL, asLogInfos, asLogDebug, asLogScript, asLogTimestamp, asFieldColorNumeric,
     asFieldColorReal, asFieldColorText, asFieldColorBinary, asFieldColorDatetime, asFieldColorSpatial,
@@ -415,7 +415,7 @@ type
   function IsNotEmpty(Str: String): Boolean;
   function IfEmpty(Str: String; WhenEmpty: String): String;
   function MessageDialog(const Msg: string; DlgType: TMsgDlgType; Buttons: TMsgDlgButtons): Integer; overload;
-  function MessageDialog(const Title, Msg: string; DlgType: TMsgDlgType; Buttons: TMsgDlgButtons; KeepAskingSetting: TAppSettingIndex=asUnused; FooterText: String=''): Integer; overload;
+  function MessageDialog(const Title, Msg: string; DlgType: TMsgDlgType; Buttons: TMsgDlgButtons; KeepAskingSetting: TAppSettingIndex=asUnused; FooterText: String=''; CaptionContext: String=''): Integer; overload;
   function ErrorDialog(Msg: string): Integer; overload;
   function ErrorDialog(const Title, Msg: string): Integer; overload;
   function GetLocaleString(const ResourceId: Integer): WideString;
@@ -2461,7 +2461,7 @@ begin
 end;
 
 
-function MessageDialog(const Title, Msg: string; DlgType: TMsgDlgType; Buttons: TMsgDlgButtons; KeepAskingSetting: TAppSettingIndex=asUnused; FooterText: String=''): Integer;
+function MessageDialog(const Title, Msg: string; DlgType: TMsgDlgType; Buttons: TMsgDlgButtons; KeepAskingSetting: TAppSettingIndex=asUnused; FooterText: String=''; CaptionContext: String=''): Integer;
 var
   m: String;
   Dialog: TTaskDialog;
@@ -2521,7 +2521,9 @@ begin
     end;
     if Title <> Dialog.Caption then
       Dialog.Title := Title;
-    if Assigned(MainForm) and (MainForm.ActiveConnection <> nil) then
+    if not CaptionContext.IsEmpty then
+      Dialog.Caption := CaptionContext + ': ' + Dialog.Caption
+    else if Assigned(MainForm) and (MainForm.ActiveConnection <> nil) then
       Dialog.Caption := MainForm.ActiveConnection.Parameters.SessionName + ': ' + Dialog.Caption;
     rx := TRegExpr.Create;
     rx.Expression := 'https?://[^\s"]+';
@@ -4267,6 +4269,7 @@ begin
   InitSetting(asManagedColorProduction,           'ManagedColorProduction',                clNone);
   InitSetting(asManagedColorReplica,              'ManagedColorReplica',                   clNone);
   InitSetting(asManagedColorTest,                 'ManagedColorTest',                      clNone);
+  InitSetting(asManagedColorOther,                'ManagedColorOther',                     clNone);
   InitSetting(asApiConnectionId,                  'ApiConnectionId',                       0, False, '', True);
   InitSetting(asApiMatchHost,                     'ApiMatchHost',                          0, False, '', True);
   InitSetting(asApiMatchDatabase,                 'ApiMatchDatabase',                      0, False, '', True);
