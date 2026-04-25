@@ -130,6 +130,7 @@ function SqlMonitorGetApiKey: String;
 procedure SqlMonitorClearCentralAuthSession;
 function SqlMonitorGetDecisionMessage(Response: TSqlMonitorBatchResponse): String;
 function SqlMonitorTranslate(const MsgId: String): String;
+function SqlMonitorIsOtherTarget(Connection: TDBConnection): Boolean;
 function SqlMonitorIsProductionTarget(Connection: TDBConnection): Boolean;
 
 procedure SqlMonitorPrepareConnectionAuthentication(Connection: TDBConnection);
@@ -299,10 +300,16 @@ begin
     Result := 'A escrita SQL sera executada no seguinte destino:'
   else if SameText(MsgId, 'Central validation confirmed this production write. Do you want to execute it now?') then
     Result := 'A validacao central confirmou esta escrita em producao. Deseja executar agora?'
+  else if SameText(MsgId, 'Central validation confirmed this write. Do you want to execute it now?') then
+    Result := 'A validacao central confirmou esta escrita. Deseja executar agora?'
   else if SameText(MsgId, 'Confirm production execution') then
     Result := 'Confirmar execucao em producao'
+  else if SameText(MsgId, 'Confirm write execution') then
+    Result := 'Confirmar execucao da escrita'
   else if SameText(MsgId, 'Production execution was cancelled by the user after central validation.') then
     Result := 'A execucao em producao foi cancelada pelo usuario apos a validacao central.'
+  else if SameText(MsgId, 'Write execution was cancelled by the user after central validation.') then
+    Result := 'A execucao da escrita foi cancelada pelo usuario apos a validacao central.'
   else if SameText(MsgId, 'Change connection') then
     Result := 'Alterar conexao'
   else if SameText(MsgId, 'You are changing to the following connection:') then
@@ -1404,10 +1411,16 @@ begin
 end;
 
 
+function SqlMonitorIsOtherTarget(Connection: TDBConnection): Boolean;
+begin
+  Result := ConnectionNameContains(Connection, 'Outro');
+end;
+
+
 function SqlMonitorIsProductionTarget(Connection: TDBConnection): Boolean;
 begin
   Result := (Connection <> nil) and (not SqlMonitorIsTestTarget(Connection)) and
-    (not SqlMonitorIsReplicaTarget(Connection));
+    (not SqlMonitorIsReplicaTarget(Connection)) and (not SqlMonitorIsOtherTarget(Connection));
 end;
 
 
@@ -1665,14 +1678,27 @@ begin
           Client.WaitForDecision(RequestId, Response);
         end;
 
-        if HasWrites and SqlMonitorIsProductionTarget(Connection) and (Response.Status in [smbsLogged, smbsApproved]) then begin
-          DecisionMsg := Format('%s'#13#10#13#10'%s',
-            [SqlMonitorTranslate('Central validation confirmed this production write. Do you want to execute it now?'),
-             SqlMonitorTargetDisplayName(Connection)]);
-          if MessageDialog(SqlMonitorTranslate('Confirm production execution'), DecisionMsg, mtWarning, [mbYes, mbCancel]) <> mrYes then begin
+        if HasWrites and (not SqlMonitorIsTestTarget(Connection)) and (not SqlMonitorIsReplicaTarget(Connection)) and
+          (Response.Status in [smbsLogged, smbsApproved]) then begin
+          if SqlMonitorIsProductionTarget(Connection) then
+            DecisionMsg := Format('%s'#13#10#13#10'%s',
+              [SqlMonitorTranslate('Central validation confirmed this production write. Do you want to execute it now?'),
+               SqlMonitorTargetDisplayName(Connection)])
+          else
+            DecisionMsg := Format('%s'#13#10#13#10'%s',
+              [SqlMonitorTranslate('Central validation confirmed this write. Do you want to execute it now?'),
+               SqlMonitorTargetDisplayName(Connection)]);
+          if MessageDialog(
+            IfThen(SqlMonitorIsProductionTarget(Connection),
+              SqlMonitorTranslate('Confirm production execution'),
+              SqlMonitorTranslate('Confirm write execution')),
+            DecisionMsg, mtWarning, [mbYes, mbCancel]) <> mrYes then begin
             if Assigned(MainForm) then
               MainForm.LogSQL(SqlMonitorTranslate('SQL monitor blocked execution: ') +
-                SqlMonitorTranslate('Production execution was cancelled by the user after central validation.'), lcError, Connection);
+                IfThen(SqlMonitorIsProductionTarget(Connection),
+                  SqlMonitorTranslate('Production execution was cancelled by the user after central validation.'),
+                  SqlMonitorTranslate('Write execution was cancelled by the user after central validation.')),
+                lcError, Connection);
             Result := False;
             Exit;
           end;

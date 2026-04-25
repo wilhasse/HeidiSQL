@@ -359,6 +359,7 @@ type
       function GetExternalCliArguments(Connection: TDBConnection; ReplacePassword: TThreeStateBoolean): String;
       function IsManagedTestTarget: Boolean;
       function IsManagedReplicaTarget: Boolean;
+      function IsManagedOtherTarget: Boolean;
       function IsManagedProductionTarget: Boolean;
       function UsesManagedEnvironmentColor: Boolean;
       function EffectiveSessionColor: TColor;
@@ -2110,9 +2111,19 @@ begin
 end;
 
 
+function TConnectionParameters.IsManagedOtherTarget: Boolean;
+var
+  Haystack: String;
+begin
+  Haystack := UpperCase(FSessionPath + ' ' + SessionName + ' ' + FAllDatabases + ' ' + FComment);
+  Result := FApiManaged and (Pos('OUTRO', Haystack) > 0);
+end;
+
+
 function TConnectionParameters.IsManagedProductionTarget: Boolean;
 begin
-  Result := FApiManaged and (not IsManagedTestTarget) and (not IsManagedReplicaTarget);
+  Result := FApiManaged and (not IsManagedTestTarget) and (not IsManagedReplicaTarget) and
+    (not IsManagedOtherTarget);
 end;
 
 
