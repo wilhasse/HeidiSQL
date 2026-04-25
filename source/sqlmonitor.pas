@@ -145,12 +145,18 @@ procedure SqlMonitorShowError(const Title, Msg: String);
 implementation
 
 uses
-  System.Math, System.DateUtils, System.IOUtils, Winapi.WinCrypt, Vcl.Controls, Vcl.StdCtrls, Vcl.Dialogs, Vcl.Graphics,
+  System.Math, System.DateUtils, System.IOUtils, Vcl.Controls, Vcl.StdCtrls, Vcl.Dialogs, Vcl.Graphics,
   apphelpers, gnugettext, Main;
 
 {$I const.inc}
 
 type
+  DATA_BLOB = record
+    cbData: DWORD;
+    pbData: PByte;
+  end;
+  PDATA_BLOB = ^DATA_BLOB;
+
   TSqlMonitorWaitState = class(TObject)
   public
     Cancelled: Boolean;
@@ -216,6 +222,16 @@ var
   CachedCentralAuthUsername: String;
   CentralAuthCacheRestoreAttempted: Boolean;
   CachedTicketInfo: TDictionary<String, TSqlMonitorTicketInfo>;
+
+const
+  CRYPTPROTECT_UI_FORBIDDEN = $1;
+
+function CryptProtectData(pDataIn: PDATA_BLOB; szDataDescr: LPCWSTR; pOptionalEntropy,
+  pvReserved: Pointer; pPromptStruct: Pointer; dwFlags: DWORD;
+  pDataOut: PDATA_BLOB): BOOL; stdcall; external 'crypt32.dll' name 'CryptProtectData';
+function CryptUnprotectData(pDataIn: PDATA_BLOB; ppszDataDescr: Pointer; pOptionalEntropy,
+  pvReserved: Pointer; pPromptStruct: Pointer; dwFlags: DWORD;
+  pDataOut: PDATA_BLOB): BOOL; stdcall; external 'crypt32.dll' name 'CryptUnprotectData';
 
 function GetJsonString(Obj: TJSONObject; const Name: String; const DefaultValue: String=''): String; forward;
 function TryParseCentralAuthExpiration(const Value: String; out ParsedValue: TDateTime): Boolean; forward;
@@ -595,7 +611,7 @@ var
 begin
   CacheFilePath := GetCentralAuthCacheFilePath;
   if FileExists(CacheFilePath) then
-    SysUtils.DeleteFile(CacheFilePath);
+    TFile.Delete(CacheFilePath);
 end;
 
 
