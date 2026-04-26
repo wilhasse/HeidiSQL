@@ -11,7 +11,7 @@ function SqlMonitorCheckAndApplyClientUpdate(AOwner: TComponent; const CurrentVe
 implementation
 
 uses
-  System.SysUtils, System.JSON, System.StrUtils, System.Hash, System.Math, Winapi.Windows, Winapi.ShellAPI, TlHelp32,
+  System.SysUtils, System.JSON, System.StrUtils, System.Hash, System.Math, Winapi.Windows, Winapi.ShellAPI, PsAPI, TlHelp32,
   Vcl.Forms, Vcl.Dialogs, Vcl.Controls, Vcl.StdCtrls,
   apphelpers, sqlmonitor;
 
@@ -100,6 +100,26 @@ begin
 end;
 
 
+function GetProcessExecutablePath(ProcessId: DWORD): String;
+var
+  ProcessHandle: THandle;
+  Buffer: array[0..MAX_PATH * 4] of Char;
+  BufferLen: DWORD;
+begin
+  Result := '';
+  ProcessHandle := OpenProcess(PROCESS_QUERY_INFORMATION or PROCESS_VM_READ, False, ProcessId);
+  if ProcessHandle = 0 then
+    Exit;
+  try
+    BufferLen := GetModuleFileNameEx(ProcessHandle, 0, Buffer, Length(Buffer));
+    if BufferLen > 0 then
+      SetString(Result, Buffer, BufferLen);
+  finally
+    CloseHandle(ProcessHandle);
+  end;
+end;
+
+
 function IsHeidiSqlProcessName(const ProcessName: String): Boolean;
 var
   NormalizedName: String;
@@ -114,10 +134,11 @@ function AnotherHeidiSqlInstanceRunning: Boolean;
 var
   Snapshot: THandle;
   Entry: TProcessEntry32;
-  CurrentProcessName, ProcessName: String;
+  CurrentProcessName, ProcessName, CurrentProcessPath, OtherProcessPath: String;
 begin
   Result := False;
   CurrentProcessName := LowerCase(ExtractFileName(Application.ExeName));
+  CurrentProcessPath := LowerCase(ExpandFileName(Application.ExeName));
   if CurrentProcessName.IsEmpty then
     Exit;
 
@@ -133,9 +154,19 @@ begin
     repeat
       if Entry.th32ProcessID <> GetCurrentProcessId then begin
         ProcessName := LowerCase(ExtractFileName(Entry.szExeFile));
-        if (ProcessName = CurrentProcessName) or
-          (IsHeidiSqlProcessName(CurrentProcessName) and IsHeidiSqlProcessName(ProcessName)) then
-          Exit(True);
+        if ProcessName = CurrentProcessName then begin
+          OtherProcessPath := LowerCase(GetProcessExecutablePath(Entry.th32ProcessID));
+          if OtherProcessPath.IsEmpty then
+            Continue;
+          if SameText(OtherProcessPath, CurrentProcessPath) then
+            Exit(True);
+        end else if IsHeidiSqlProcessName(CurrentProcessName) and IsHeidiSqlProcessName(ProcessName) then begin
+          OtherProcessPath := LowerCase(GetProcessExecutablePath(Entry.th32ProcessID));
+          if OtherProcessPath.IsEmpty then
+            Continue;
+          if SameText(ExtractFileDir(OtherProcessPath), ExtractFileDir(CurrentProcessPath)) then
+            Exit(True);
+        end;
       end;
     until not Process32Next(Snapshot, Entry);
   finally
