@@ -285,6 +285,8 @@ begin
     Result := 'Aprovacao SQL centralizada bloqueou a execucao'
   else if SameText(MsgId, 'Writes are blocked for Espelho replica databases.') then
     Result := 'Escritas estao bloqueadas para bancos replica Espelho'
+  else if SameText(MsgId, 'Manual transaction control is not allowed in HeidiSQL CSLOG (%s). Keep autocommit enabled and use the centralized approval flow.') then
+    Result := 'Controle manual de transacao nao e permitido no HeidiSQL CSLOG (%s). Mantenha o autocommit habilitado e use o fluxo de aprovacao centralizada.'
   else if SameText(MsgId, 'Central SQL logging is unavailable. Continuing without centralized logging.') then
     Result := 'O log SQL centralizado esta indisponivel. Continuando sem log centralizado.'
   else if SameText(MsgId, 'SQL monitor logging warning: ') then
@@ -1651,6 +1653,70 @@ begin
 end;
 
 
+function NormalizeSqlCommandText(const SQL: String): String;
+begin
+  Result := UpperCase(Trim(TSQLBatch.GetSQLWithoutComments(SQL)));
+  Result := StringReplace(Result, #13, ' ', [rfReplaceAll]);
+  Result := StringReplace(Result, #10, ' ', [rfReplaceAll]);
+  Result := StringReplace(Result, #9, ' ', [rfReplaceAll]);
+  while Pos('  ', Result) > 0 do
+    Result := StringReplace(Result, '  ', ' ', [rfReplaceAll]);
+end;
+
+
+function SqlStartsWithKeyword(const SQL, Keyword: String): Boolean;
+begin
+  Result := SameText(SQL, Keyword) or (Copy(SQL, 1, Length(Keyword)+1) = Keyword + ' ');
+end;
+
+
+function StatementIsBlockedTransactionControl(const SQL: String; out Reason: String): Boolean;
+var
+  Command, CleanSql, AfterCommand, CompactSql: String;
+begin
+  Result := False;
+  Reason := '';
+  CleanSql := NormalizeSqlCommandText(SQL);
+  if CleanSql.IsEmpty then
+    Exit;
+
+  Command := UpperCase(getFirstWord(CleanSql));
+  CompactSql := StringReplace(CleanSql, ' ', '', [rfReplaceAll]);
+
+  if SameText(Command, 'SET') and (Pos('AUTOCOMMIT', CompactSql) > 0) and
+    ((Pos('AUTOCOMMIT=0', CompactSql) > 0) or (Pos('AUTOCOMMIT:=0', CompactSql) > 0) or
+     (Pos('AUTOCOMMIT=OFF', CompactSql) > 0) or (Pos('AUTOCOMMIT:=OFF', CompactSql) > 0) or
+     (Pos('AUTOCOMMIT=FALSE', CompactSql) > 0) or (Pos('AUTOCOMMIT:=FALSE', CompactSql) > 0)) then
+    Result := True
+  else if SameText(Command, 'START') then begin
+    AfterCommand := Trim(Copy(CleanSql, Length(Command)+1, MaxInt));
+    Result := SqlStartsWithKeyword(AfterCommand, 'TRANSACTION');
+  end
+  else if SameText(Command, 'BEGIN') or SameText(Command, 'COMMIT') or SameText(Command, 'ROLLBACK') then
+    Result := True;
+
+  if Result then
+    Reason := Format(SqlMonitorTranslate('Manual transaction control is not allowed in HeidiSQL CSLOG (%s). Keep autocommit enabled and use the centralized approval flow.'), [Command]);
+end;
+
+
+function StatementListHasBlockedTransactionControl(StatementSql: TStrings; out Reason: String): Boolean;
+var
+  i: Integer;
+begin
+  Result := False;
+  Reason := '';
+  if StatementSql = nil then
+    Exit;
+  for i:=0 to StatementSql.Count-1 do begin
+    if StatementIsBlockedTransactionControl(StatementSql[i], Reason) then begin
+      Result := True;
+      Break;
+    end;
+  end;
+end;
+
+
 function StatementListHasGuardedWrites(StatementSql: TStrings): Boolean;
 var
   i: Integer;
@@ -1935,6 +2001,15 @@ begin
   Context := nil;
   if (StatementSql = nil) or (StatementSql.Count = 0) then
     Exit;
+
+  if CSLOG_BUILD and Assigned(Connection) and Connection.Parameters.IsAnyMySQL and
+    StatementListHasBlockedTransactionControl(StatementSql, DecisionMsg) then begin
+    if Assigned(MainForm) then
+      MainForm.LogSQL(SqlMonitorTranslate('SQL monitor blocked execution: ') + DecisionMsg, lcError, Connection);
+    SqlMonitorShowError(SqlMonitorTranslate('Central SQL approval blocked execution'), DecisionMsg);
+    Result := False;
+    Exit;
+  end;
 
   HasGuardedWrites := StatementListHasGuardedWrites(StatementSql);
   HasWrites := StatementListHasWrites(StatementSql);

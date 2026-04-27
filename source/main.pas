@@ -2833,15 +2833,24 @@ end;
 
 procedure TMainForm.UpdateToolbarBaseLabel;
 var
-  CaptionText: String;
+  CaptionText, DisplayName, HostName, DatabaseName: String;
   LeftPos, TopPos, MaxWidth: Integer;
 begin
   if not Assigned(lblToolbarBase) then
     Exit;
 
   CaptionText := '';
-  if Assigned(ActiveConnection) then
-    CaptionText := Format(SqlMonitorTranslate('Assessoria Base: %s'), [GetToolbarBaseDisplayName(ActiveConnection)]);
+  if Assigned(ActiveConnection) then begin
+    DisplayName := GetToolbarBaseDisplayName(ActiveConnection);
+    HostName := Trim(ActiveConnection.Parameters.Hostname);
+    if HostName.IsEmpty then
+      HostName := '-';
+    DatabaseName := Trim(ActiveConnection.Database);
+    if DatabaseName.IsEmpty then
+      DatabaseName := '-';
+    CaptionText := Format(SqlMonitorTranslate('Assessoria Base: %s'),
+      [Format('%s | IP: %s | Banco: %s', [DisplayName, HostName, DatabaseName])]);
+  end;
 
   lblToolbarBase.Caption := CaptionText;
   lblToolbarBase.Hint := CaptionText;
