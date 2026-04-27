@@ -2834,6 +2834,7 @@ end;
 procedure TMainForm.UpdateToolbarBaseLabel;
 var
   CaptionText, DisplayName, HostName, DatabaseName: String;
+  DBObj: PDBObject;
   LeftPos, TopPos, MaxWidth: Integer;
 begin
   if not Assigned(lblToolbarBase) then
@@ -2848,6 +2849,16 @@ begin
     DatabaseName := Trim(ActiveConnection.Database);
     if DatabaseName.IsEmpty and Assigned(FActiveDbObj) and (FActiveDbObj.Connection = ActiveConnection) then
       DatabaseName := Trim(FActiveDbObj.Database);
+    if DatabaseName.IsEmpty and Assigned(DBtree) and Assigned(DBtree.FocusedNode) then begin
+      DBObj := DBtree.GetNodeData(DBtree.FocusedNode);
+      if Assigned(DBObj) and Assigned(DBObj.Connection) and (DBObj.Connection = ActiveConnection) then begin
+        DatabaseName := Trim(DBObj.Database);
+        if DatabaseName.IsEmpty and (DBObj.NodeType = lntDb) then
+          DatabaseName := Trim(DBObj.Name);
+      end;
+    end;
+    if DatabaseName.IsEmpty and (ActiveConnection.AllDatabases.Count = 1) then
+      DatabaseName := Trim(ActiveConnection.AllDatabases[0]);
     if DatabaseName.IsEmpty then
       DatabaseName := '-';
     CaptionText := Format(SqlMonitorTranslate('Assessoria Base: %s'),
