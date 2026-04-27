@@ -2846,6 +2846,8 @@ begin
     if HostName.IsEmpty then
       HostName := '-';
     DatabaseName := Trim(ActiveConnection.Database);
+    if DatabaseName.IsEmpty and Assigned(FActiveDbObj) and (FActiveDbObj.Connection = ActiveConnection) then
+      DatabaseName := Trim(FActiveDbObj.Database);
     if DatabaseName.IsEmpty then
       DatabaseName := '-';
     CaptionText := Format(SqlMonitorTranslate('Assessoria Base: %s'),
@@ -2866,10 +2868,7 @@ begin
   end;
 
   LeftPos := ToolBarMainButtons.Left + ToolBarMainButtons.Width + 8;
-  if ToolBarDonate.Visible then
-    MaxWidth := ToolBarDonate.Left - LeftPos - 8
-  else
-    MaxWidth := ControlBarMain.ClientWidth - LeftPos - 8;
+  MaxWidth := ControlBarMain.ClientWidth - LeftPos - 8;
   if MaxWidth < 0 then
     MaxWidth := 0;
 
