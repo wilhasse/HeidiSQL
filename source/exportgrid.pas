@@ -181,7 +181,12 @@ var
   comboItem: TComboExItem;
 begin
   HasSizeGrip := True;
-  editFilename.Text := AppSettings.ReadString(asGridExportFilename);
+  editFilename.OnChange := nil;
+  try
+    editFilename.Text := AppSettings.ReadString(asGridExportFilename);
+  finally
+    editFilename.OnChange := editFilenameChange;
+  end;
   FRecentFiles := Explode(DELIM, AppSettings.ReadString(asGridExportRecentFiles));
   comboEncoding.Items.Assign(MainForm.FileEncodings);
   comboEncoding.Items.Delete(0); // Remove "Auto detect"
@@ -326,7 +331,10 @@ end;
 function TfrmExportGrid.GetExportFormat: TGridExportFormat;
 begin
   // This is slow, don't use in large loops
-  Result := TGridExportFormat(comboFormat.ItemIndex);
+  if (comboFormat.ItemIndex < Ord(Low(TGridExportFormat))) or (comboFormat.ItemIndex > Ord(High(TGridExportFormat))) then
+    Result := Low(TGridExportFormat)
+  else
+    Result := TGridExportFormat(comboFormat.ItemIndex);
 end;
 
 
