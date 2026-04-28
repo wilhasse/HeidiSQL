@@ -110,6 +110,18 @@ begin
 end;
 
 
+function MakeCatalogMatchKey(Item: TSqlCatalogItem): String;
+begin
+  if Item = nil then
+    Exit('');
+  Result := NormalizeMatchPart(Item.Host) + #1
+    + IntToStr(Item.Port) + #1
+    + NormalizeMatchPart(Item.DatabaseName) + #1
+    + NormalizeMatchPart(Item.EnvironmentName) + #1
+    + NormalizeMatchPart(Item.Qualifier);
+end;
+
+
 function SanitizeSessionPathPart(const Value: String): String;
 var
   ResultText: String;
@@ -385,6 +397,7 @@ begin
     else
       RootJson.AddPair('client_version', '');
     RootJson.AddPair('client_host', GetCatalogClientHostName);
+    RootJson.AddPair('supports_distinct_catalog_qualifiers', TJSONBool.Create(True));
     Result := RootJson.ToJSON;
   finally
     RootJson.Free;
@@ -617,7 +630,7 @@ begin
       if not MapCatalogNetType(CatalogItem.NetType, DummyNetType) then
         raise Exception.CreateFmt(SqlMonitorTranslate('The central service returned an unsupported network type for catalog entry "%s".'), [CatalogItem.ConnectionId]);
 
-      MatchKey := MakeMatchKey(CatalogItem.Host, CatalogItem.DatabaseName);
+      MatchKey := MakeCatalogMatchKey(CatalogItem);
       if ConnectionIds.ContainsKey(CatalogItem.ConnectionId) or MatchKeys.ContainsKey(MatchKey) then
         raise Exception.Create(SqlMonitorTranslate('The central service returned an invalid session catalog payload.'));
       ConnectionIds.Add(CatalogItem.ConnectionId, True);
@@ -740,7 +753,7 @@ begin
 end;
 
 
-procedure CollectByMatchKey(ExistingSessions: TObjectList<TSqlExistingSession>; const MatchKey: String;
+procedure CollectByMatchKey(ExistingSessions: TObjectList<TSqlExistingSession>; const MatchKey, ConnectionId: String;
   Candidates: TObjectList<TSqlExistingSession>);
 var
   DelimPos: Integer;
@@ -758,6 +771,8 @@ begin
 
   for Item in ExistingSessions do begin
     if Item.Handled then
+      Continue;
+    if Item.Managed and (not Trim(Item.ApiConnectionId).IsEmpty) and (not SameText(Item.ApiConnectionId, ConnectionId)) then
       Continue;
     if SameText(Item.MatchHost, HostName) and (Item.MatchDatabases.IndexOf(DatabaseName) > -1) then
       Candidates.Add(Item);
@@ -846,6 +861,8 @@ begin
   Result := False;
   if (SessionRef = nil) or (ActiveCatalogKeys = nil) then
     Exit;
+  if (not Trim(SessionRef.ApiConnectionId).IsEmpty) and ActiveCatalogKeys.ContainsKey(NormalizeMatchPart(SessionRef.ApiConnectionId)) then
+    Exit(True);
   if SessionRef.MatchDatabases.Count <= 1 then
     Exit;
 
@@ -957,8 +974,10 @@ begin
   try
     Catalog := FetchCatalogResponse;
     Catalog.Connections.Sort(TComparer<TSqlCatalogItem>.Construct(SortCatalogItems));
-    for Item in Catalog.Connections do
+    for Item in Catalog.Connections do begin
+      ActiveCatalogKeys.AddOrSetValue(NormalizeMatchPart(Item.ConnectionId), True);
       ActiveCatalogKeys.AddOrSetValue(MakeMatchKey(Item.Host, Item.DatabaseName), True);
+    end;
     ExistingSessions := LoadExistingSessions;
 
     for Item in Catalog.Connections do begin
@@ -976,7 +995,7 @@ begin
 
       Winner := FindManagedSessionByConnectionId(ExistingSessions, Item.ConnectionId);
       Candidates.Clear;
-      CollectByMatchKey(ExistingSessions, MatchKey, Candidates);
+      CollectByMatchKey(ExistingSessions, MatchKey, Item.ConnectionId, Candidates);
       if (Winner = nil) and (Candidates.Count > 0) then
         Winner := PickWinner(Candidates, DesiredPath);
 
