@@ -360,6 +360,7 @@ type
       function IsManagedTestTarget: Boolean;
       function IsManagedReplicaTarget: Boolean;
       function IsManagedOtherTarget: Boolean;
+      function IsManagedDeadTarget: Boolean;
       function IsManagedProductionTarget: Boolean;
       function UsesManagedEnvironmentColor: Boolean;
       function EffectiveSessionColor: TColor;
@@ -2120,10 +2121,19 @@ begin
 end;
 
 
+function TConnectionParameters.IsManagedDeadTarget: Boolean;
+var
+  Haystack: String;
+begin
+  Haystack := UpperCase(FSessionPath + ' ' + SessionName + ' ' + FAllDatabases + ' ' + FComment);
+  Result := FApiManaged and (Pos('MORTO', Haystack) > 0);
+end;
+
+
 function TConnectionParameters.IsManagedProductionTarget: Boolean;
 begin
   Result := FApiManaged and (not IsManagedTestTarget) and (not IsManagedReplicaTarget) and
-    (not IsManagedOtherTarget);
+    (not IsManagedOtherTarget) and (not IsManagedDeadTarget);
 end;
 
 

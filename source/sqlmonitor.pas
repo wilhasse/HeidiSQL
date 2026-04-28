@@ -131,6 +131,7 @@ procedure SqlMonitorClearCentralAuthSession;
 function SqlMonitorGetDecisionMessage(Response: TSqlMonitorBatchResponse): String;
 function SqlMonitorTranslate(const MsgId: String): String;
 function SqlMonitorIsOtherTarget(Connection: TDBConnection): Boolean;
+function SqlMonitorIsDeadTarget(Connection: TDBConnection): Boolean;
 function SqlMonitorIsProductionTarget(Connection: TDBConnection): Boolean;
 
 procedure SqlMonitorPrepareConnectionAuthentication(Connection: TDBConnection);
@@ -285,6 +286,8 @@ begin
     Result := 'Aprovacao SQL centralizada bloqueou a execucao'
   else if SameText(MsgId, 'Writes are blocked for Espelho replica databases.') then
     Result := 'Escritas estao bloqueadas para bancos replica Espelho'
+  else if SameText(MsgId, 'Writes are blocked for Morto databases.') then
+    Result := 'Escritas estao bloqueadas para bancos Morto'
   else if SameText(MsgId, 'Manual transaction control is not allowed in HeidiSQL CSLOG (%s). Keep autocommit enabled and use the centralized approval flow.') then
     Result := 'Controle manual de transacao nao e permitido no HeidiSQL CSLOG (%s). Mantenha o autocommit habilitado e use o fluxo de aprovacao centralizada.'
   else if SameText(MsgId, 'Central SQL logging is unavailable. Continuing without centralized logging.') then
@@ -1780,10 +1783,17 @@ begin
 end;
 
 
+function SqlMonitorIsDeadTarget(Connection: TDBConnection): Boolean;
+begin
+  Result := ConnectionNameContains(Connection, 'Morto');
+end;
+
+
 function SqlMonitorIsProductionTarget(Connection: TDBConnection): Boolean;
 begin
   Result := (Connection <> nil) and (not SqlMonitorIsTestTarget(Connection)) and
-    (not SqlMonitorIsReplicaTarget(Connection)) and (not SqlMonitorIsOtherTarget(Connection));
+    (not SqlMonitorIsReplicaTarget(Connection)) and (not SqlMonitorIsOtherTarget(Connection)) and
+    (not SqlMonitorIsDeadTarget(Connection));
 end;
 
 
@@ -2017,6 +2027,15 @@ begin
 
   if CSLOG_BUILD and HasWrites and SqlMonitorIsReplicaTarget(Connection) then begin
     DecisionMsg := SqlMonitorTranslate('Writes are blocked for Espelho replica databases.');
+    if Assigned(MainForm) then
+      MainForm.LogSQL(SqlMonitorTranslate('SQL monitor blocked execution: ') + DecisionMsg, lcError, Connection);
+    SqlMonitorShowError(SqlMonitorTranslate('Central SQL approval blocked execution'), DecisionMsg);
+    Result := False;
+    Exit;
+  end;
+
+  if CSLOG_BUILD and HasWrites and SqlMonitorIsDeadTarget(Connection) then begin
+    DecisionMsg := SqlMonitorTranslate('Writes are blocked for Morto databases.');
     if Assigned(MainForm) then
       MainForm.LogSQL(SqlMonitorTranslate('SQL monitor blocked execution: ') + DecisionMsg, lcError, Connection);
     SqlMonitorShowError(SqlMonitorTranslate('Central SQL approval blocked execution'), DecisionMsg);

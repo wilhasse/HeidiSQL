@@ -548,7 +548,8 @@ begin
     if not Trim(Item.BaseName).IsEmpty then
       Parts.Add(SanitizeSessionPathPart(Item.BaseName));
     EnvironmentLabel := Trim(Item.EnvironmentName);
-    if SameText(EnvironmentLabel, 'Outro') and (not Trim(Item.Qualifier).IsEmpty) then
+    if (SameText(EnvironmentLabel, 'Outro') or SameText(EnvironmentLabel, 'Morto')) and
+      (not Trim(Item.Qualifier).IsEmpty) then
       Parts.Add(SanitizeSessionPathPart(Format('%s (%s)', [EnvironmentLabel, Trim(Item.Qualifier)])))
     else begin
       if not EnvironmentLabel.IsEmpty then
