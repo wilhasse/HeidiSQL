@@ -4271,7 +4271,7 @@ begin
   InitSetting(asManagedColorReplica,              'ManagedColorReplica',                   clNone);
   InitSetting(asManagedColorTest,                 'ManagedColorTest',                      clNone);
   InitSetting(asManagedColorOther,                'ManagedColorOther',                     clNone);
-  InitSetting(asConfirmConnectionSwitch,          'ConfirmConnectionSwitch',              0, True);
+  InitSetting(asConfirmConnectionSwitch,          'ConfirmConnectionSwitchEnabled',              0, True);
   InitSetting(asApiConnectionId,                  'ApiConnectionId',                       0, False, '', True);
   InitSetting(asApiMatchHost,                     'ApiMatchHost',                          0, False, '', True);
   InitSetting(asApiMatchDatabase,                 'ApiMatchDatabase',                      0, False, '', True);
