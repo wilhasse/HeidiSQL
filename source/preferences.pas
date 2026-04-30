@@ -1,4 +1,4 @@
-﻿unit preferences;
+unit preferences;
 
 
 // -------------------------------------
@@ -911,7 +911,7 @@ begin
       cboxManagedReplicaColor.Selected := AppSettings.ReadInt(asManagedColorReplica);
       cboxManagedTestColor.Selected := AppSettings.ReadInt(asManagedColorTest);
       cboxManagedOtherColor.Selected := AppSettings.ReadInt(asManagedColorOther);
-      chkConfirmConnectionSwitch.Checked := AppSettings.ReadBool(asConfirmConnectionSwitch);
+      chkConfirmConnectionSwitch.Checked := AppSettings.ReadBool(asConfirmConnectionSwitch, '', True);
     end;
   finally
     AppSettings.RestorePath;

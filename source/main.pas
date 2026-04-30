@@ -10393,7 +10393,7 @@ begin
     else
       NewConnection := nil;
 
-    if AppSettings.ReadBool(asConfirmConnectionSwitch) and Assigned(CurrentConnection) and
+    if AppSettings.ReadBool(asConfirmConnectionSwitch, '', True) and Assigned(CurrentConnection) and
       Assigned(NewConnection) and (CurrentConnection <> NewConnection) then begin
       NewConnectionName := GetToolbarBaseDisplayName(NewConnection);
       PromptKey := Trim(CurrentConnection.Parameters.SessionPath) + '->' + Trim(NewConnection.Parameters.SessionPath);
