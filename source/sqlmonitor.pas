@@ -1646,7 +1646,7 @@ function StatementIsGuardedWrite(const SQL: String): Boolean;
 var
   Command: String;
 begin
-  Command := UpperCase(getFirstWord(SQL));
+  Command := UpperCase(getFirstWord(TSQLBatch.GetSQLWithoutComments(SQL)));
   Result := (Command = 'UPDATE') or (Command = 'DELETE');
 end;
 
@@ -1655,7 +1655,7 @@ function StatementIsWrite(const SQL: String): Boolean;
 var
   Command: String;
 begin
-  Command := UpperCase(getFirstWord(SQL));
+  Command := UpperCase(getFirstWord(TSQLBatch.GetSQLWithoutComments(SQL)));
   Result := (Command = 'INSERT') or (Command = 'UPDATE') or (Command = 'DELETE');
 end;
 
