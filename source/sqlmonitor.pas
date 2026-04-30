@@ -342,6 +342,8 @@ begin
     Result := 'Alterar conexao'
   else if SameText(MsgId, 'You are changing to the following connection:') then
     Result := 'Voce esta mudando para a seguinte conexao:'
+  else if SameText(MsgId, 'After disconnecting the current connection, HeidiSQL will switch to:') then
+    Result := 'Apos desconectar a conexao atual, o HeidiSQL mudara para:'
   else if SameText(MsgId, 'Do you want to continue?') then
     Result := 'Deseja continuar?'
   else if SameText(MsgId, 'Assessoria Base: %s') then

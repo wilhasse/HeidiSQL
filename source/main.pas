@@ -2678,8 +2678,10 @@ end;
 
 procedure TMainForm.actDisconnectExecute(Sender: TObject);
 var
-  Connection: TDBConnection;
-  Node: PVirtualNode;
+  Connection, NextConnection: TDBConnection;
+  Node, NextNode: PVirtualNode;
+  NextDbObj: PDBObject;
+  ConfirmMsg, NextConnectionName: String;
   DlgResult: Integer;
   Dialog: TConnForm;
 begin
@@ -2689,6 +2691,24 @@ begin
     Exit;
   // Find and remove connection node from tree
   Node := GetRootNode(DBtree, Connection);
+  if AppSettings.ReadBool(asConfirmConnectionSwitch, '', True) and Assigned(Node) and (FConnections.Count > 1) then begin
+    NextNode := DBtree.GetFirstChild(nil);
+    if NextNode = Node then
+      NextNode := DBtree.GetNextSibling(Node);
+    NextConnection := nil;
+    if Assigned(NextNode) then begin
+      NextDbObj := DBtree.GetNodeData(NextNode);
+      if Assigned(NextDbObj) then
+        NextConnection := NextDbObj.Connection;
+    end;
+    if Assigned(NextConnection) and (NextConnection <> Connection) then begin
+      NextConnectionName := GetToolbarBaseDisplayName(NextConnection);
+      ConfirmMsg := SqlMonitorTranslate('After disconnecting the current connection, HeidiSQL will switch to:') + sLineBreak + sLineBreak +
+        NextConnectionName + sLineBreak + sLineBreak + SqlMonitorTranslate('Do you want to continue?');
+      if MessageDialog(SqlMonitorTranslate('Change connection'), ConfirmMsg, mtWarning, [mbYes, mbCancel]) <> mrYes then
+        Exit;
+    end;
+  end;
   DBTree.DeleteNode(Node);
   FConnections.Remove(Connection);
   // TODO: focus last session?
