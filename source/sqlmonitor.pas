@@ -346,6 +346,8 @@ begin
     Result := 'Deseja continuar?'
   else if SameText(MsgId, 'Assessoria Base: %s') then
     Result := 'Assessoria Base: %s'
+  else if SameText(MsgId, 'Confirm before switching connections') then
+    Result := 'Confirmar antes de trocar de conexao'
   else if SameText(MsgId, 'Another HeidiSQL instance is already running. Close the other window before installing the update.') then
     Result := 'Outra instancia do HeidiSQL ja esta em execucao. Feche a outra janela antes de instalar a atualizacao.'
   else if SameText(MsgId, 'HeidiSQL CSLOG update was blocked because another HeidiSQL window is open. This window will be closed now.') then

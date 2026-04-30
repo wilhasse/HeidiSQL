@@ -233,6 +233,7 @@ type
     asTheme, asIconPack, asWebSearchBaseUrl, asSqlMonitorUrl, asSqlMonitorApiKey, asSqlMonitorCentralAuthEnabled,
     asApiManaged, asApiConnectionId, asApiMatchHost, asApiMatchDatabase, asApiLastSyncAt, asApiArchived, asApiCustomer,
     asManagedColorProduction, asManagedColorReplica, asManagedColorTest, asManagedColorOther,
+    asConfirmConnectionSwitch,
     asFindDialogReplaceHistory, asMaxQueryResults, asLogErrors,
     asLogUserSQL, asLogSQL, asLogInfos, asLogDebug, asLogScript, asLogTimestamp, asFieldColorNumeric,
     asFieldColorReal, asFieldColorText, asFieldColorBinary, asFieldColorDatetime, asFieldColorSpatial,

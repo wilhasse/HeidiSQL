@@ -263,6 +263,7 @@ type
     cboxManagedReplicaColor: TColorBox;
     cboxManagedTestColor: TColorBox;
     cboxManagedOtherColor: TColorBox;
+    chkConfirmConnectionSwitch: TCheckBox;
     procedure InitLanguages;
     procedure CreateManagedSessionsTab;
     procedure SelectDirectory(Sender: TObject; NewFolderButton: Boolean);
@@ -407,6 +408,17 @@ begin
   cboxManagedOtherColor.Style := ColorBoxStyle;
   cboxManagedOtherColor.NoneColorColor := clNone;
   cboxManagedOtherColor.OnChange := Modified;
+
+  Inc(TopPos, 42);
+
+  chkConfirmConnectionSwitch := TCheckBox.Create(tabCslogSessions);
+  chkConfirmConnectionSwitch.Parent := tabCslogSessions;
+  chkConfirmConnectionSwitch.Left := 16;
+  chkConfirmConnectionSwitch.Top := TopPos;
+  chkConfirmConnectionSwitch.Width := tabCslogSessions.ClientWidth - 32;
+  chkConfirmConnectionSwitch.Anchors := [akLeft, akTop, akRight];
+  chkConfirmConnectionSwitch.Caption := SqlMonitorTranslate('Confirm before switching connections');
+  chkConfirmConnectionSwitch.OnClick := Modified;
 end;
 
 
@@ -500,6 +512,7 @@ begin
     AppSettings.WriteInt(asManagedColorReplica, cboxManagedReplicaColor.Selected);
     AppSettings.WriteInt(asManagedColorTest, cboxManagedTestColor.Selected);
     AppSettings.WriteInt(asManagedColorOther, cboxManagedOtherColor.Selected);
+    AppSettings.WriteBool(asConfirmConnectionSwitch, chkConfirmConnectionSwitch.Checked);
   end;
   SqlMonitorRefreshConfiguration;
 
@@ -898,6 +911,7 @@ begin
       cboxManagedReplicaColor.Selected := AppSettings.ReadInt(asManagedColorReplica);
       cboxManagedTestColor.Selected := AppSettings.ReadInt(asManagedColorTest);
       cboxManagedOtherColor.Selected := AppSettings.ReadInt(asManagedColorOther);
+      chkConfirmConnectionSwitch.Checked := AppSettings.ReadBool(asConfirmConnectionSwitch);
     end;
   finally
     AppSettings.RestorePath;

@@ -10393,7 +10393,8 @@ begin
     else
       NewConnection := nil;
 
-    if Assigned(CurrentConnection) and Assigned(NewConnection) and (CurrentConnection <> NewConnection) then begin
+    if AppSettings.ReadBool(asConfirmConnectionSwitch) and Assigned(CurrentConnection) and
+      Assigned(NewConnection) and (CurrentConnection <> NewConnection) then begin
       NewConnectionName := GetToolbarBaseDisplayName(NewConnection);
       PromptKey := Trim(CurrentConnection.Parameters.SessionPath) + '->' + Trim(NewConnection.Parameters.SessionPath);
       // VirtualTree can fire two focus-change notifications for the same transition.
