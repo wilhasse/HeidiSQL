@@ -16,7 +16,7 @@ type
   end;
 
   TSqlMonitorBatchStatus = (smbsUnknown, smbsLogged, smbsPending, smbsApproved, smbsRejected, smbsCancelled, smbsError);
-  TSqlMonitorStatementKind = (smskUnknown, smskSelect, smskInsert, smskUpdate, smskDelete, smskOther);
+  TSqlMonitorStatementKind = (smskUnknown, smskSelect, smskInsert, smskReplace, smskUpdate, smskDelete, smskOther);
   TSqlMonitorStatementDecision = (smsdUnknown, smsdLogged, smsdPending, smsdApproved, smsdRejected, smsdCancelled);
   TSqlMonitorCredentialMode = (smcmBypass, smcmManaged);
 
@@ -1302,6 +1302,8 @@ begin
     Result := smskSelect
   else if SameText(Value, 'insert') then
     Result := smskInsert
+  else if SameText(Value, 'replace') then
+    Result := smskReplace
   else if SameText(Value, 'update') then
     Result := smskUpdate
   else if SameText(Value, 'delete') then
@@ -1656,7 +1658,7 @@ var
   Command: String;
 begin
   Command := UpperCase(getFirstWord(TSQLBatch.GetSQLWithoutComments(SQL)));
-  Result := (Command = 'INSERT') or (Command = 'UPDATE') or (Command = 'DELETE');
+  Result := (Command = 'INSERT') or (Command = 'REPLACE') or (Command = 'UPDATE') or (Command = 'DELETE');
 end;
 
 
