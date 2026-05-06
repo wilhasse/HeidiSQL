@@ -4646,22 +4646,34 @@ begin
     end;
 
     if ActivateMe then begin
-      // Set focus on last uses db. If not wanted or db is gone, go to root node at least
-      RestoreLastActiveDatabase := AppSettings.ReadBool(asRestoreLastUsedDB);
-      AppSettings.SessionPath := Params.SessionPath;
-      LastActiveDatabase := AppSettings.ReadString(asLastUsedDB);
-      if RestoreLastActiveDatabase
-        and (Connection.AllDatabases.IndexOf(LastActiveDatabase) >- 1)
-        and (Connection.GetLockedTableCount(LastActiveDatabase) = 0)
-        then begin
+      if Connection.AllDatabases.Count = 1 then begin
+        LastActiveDatabase := Connection.AllDatabases[0];
+        SessionNode := GetRootNode(DBtree, Connection);
+        if Assigned(SessionNode) then
+          DBtree.Expanded[SessionNode] := True;
         SetActiveDatabase(LastActiveDatabase, Connection);
         DBNode := FindDBNode(DBtree, Connection, LastActiveDatabase);
         if Assigned(DBNode) then
           DBtree.Expanded[DBNode] := True;
       end else begin
-        SessionNode := GetRootNode(DBtree, Connection);
-        SelectNode(DBtree, SessionNode);
-        DBtree.Expanded[SessionNode] := True;
+        // Set focus on last uses db. If not wanted or db is gone, go to root node at least
+        RestoreLastActiveDatabase := AppSettings.ReadBool(asRestoreLastUsedDB);
+        AppSettings.SessionPath := Params.SessionPath;
+        LastActiveDatabase := AppSettings.ReadString(asLastUsedDB);
+        if RestoreLastActiveDatabase
+          and (Connection.AllDatabases.IndexOf(LastActiveDatabase) >- 1)
+          and (Connection.GetLockedTableCount(LastActiveDatabase) = 0)
+          then begin
+          SetActiveDatabase(LastActiveDatabase, Connection);
+          DBNode := FindDBNode(DBtree, Connection, LastActiveDatabase);
+          if Assigned(DBNode) then
+            DBtree.Expanded[DBNode] := True;
+        end else begin
+          SessionNode := GetRootNode(DBtree, Connection);
+          SelectNode(DBtree, SessionNode);
+          if Assigned(SessionNode) then
+            DBtree.Expanded[SessionNode] := True;
+        end;
       end;
     end;
 
