@@ -1088,7 +1088,7 @@ var
   Node: PVirtualNode;
   Obj: PDBObject;
   rxdb, rxtable: TRegExpr;
-  NodeMatches: Boolean;
+  NodeMatches, SomeHidden: Boolean;
   Errors: TStringList;
 begin
   // Immediately apply database filter
@@ -1102,6 +1102,7 @@ begin
   rxtable.Expression := '('+StringReplace(editTableFilter.Text, ';', '|', [rfReplaceAll])+')';
 
   Errors := TStringList.Create;
+  SomeHidden := False;
 
   TreeObjects.BeginUpdate;
   Node := TreeObjects.GetFirst;
@@ -1135,6 +1136,8 @@ begin
       end;
     end;
     TreeObjects.IsVisible[Node] := NodeMatches;
+    if not NodeMatches then
+      SomeHidden := True;
 
     Node := TreeObjects.GetNextInitialized(Node);
   end;
@@ -1145,6 +1148,10 @@ begin
 
   editDatabaseFilter.RightButton.Visible := editDatabaseFilter.Text <> '';
   editTableFilter.RightButton.Visible := editTableFilter.Text <> '';
+  if SomeHidden then
+    menuCheckAll.Caption := _('Check all visible')
+  else
+    menuCheckAll.Caption := _('Check all');
   timerCalcSize.Enabled := False;
   timerCalcSize.Enabled := True;
 end;
@@ -2086,8 +2093,11 @@ begin
       // Calculate limit so we select ~100MB per loop
       // Take care of disabled "Get full table status" session setting, where AvgRowLen is 0
       Limit := Round(100 * SIZE_MB / IfThen(DBObj.AvgRowLen>0, DBObj.AvgRowLen, AssumedAvgRowLen));
-      if comboExportData.Text = DATA_REPLACE then
+      if comboExportData.Text = DATA_REPLACE then begin
         Output('DELETE FROM '+TargetDbAndObject, True, True, True, True, True);
+        if menuExportRemoveAutoIncrement.Checked then
+          Output('/*!50000 ALTER TABLE '+TargetDbAndObject+' AUTO_INCREMENT = 1 */', True, True, True, True, True);
+      end;
       while true do begin
         Data := DBObj.Connection.GetResults(
           DBObj.Connection.ApplyLimitClause(
@@ -2281,7 +2291,7 @@ begin
     Exit;
   Conn := MainForm.ActiveConnection;
   if Conn.SqlProvider.Has(qDisableForeignKeyChecks) then
-    Conn.Query(Conn.SqlProvider.GetSql(qDisableForeignKeyChecks));
+    Conn.Query(qDisableForeignKeyChecks);
 end;
 
 
@@ -2294,7 +2304,7 @@ begin
     Exit;
   Conn := MainForm.ActiveConnection;
   if Conn.SqlProvider.Has(qEnableForeignKeyChecks) then
-    Conn.Query(Conn.SqlProvider.GetSql(qEnableForeignKeyChecks));
+    Conn.Query(qEnableForeignKeyChecks);
 end;
 
 
@@ -2509,7 +2519,7 @@ var
   DBNode, ObjNode: PVirtualNode;
   WantedType: TListNodeType;
   DBObj: PDBObject;
-  CheckNone: Boolean;
+  CheckNone, DoCheck: Boolean;
   InvertCheck: Boolean;
   CheckedNodes: Int64;
 begin
@@ -2527,25 +2537,29 @@ begin
   CheckedNodes := 0;
   while Assigned(ObjNode) do begin
     DBObj := TreeObjects.GetNodeData(ObjNode);
+
     if CheckNone then
-      TreeObjects.CheckState[ObjNode] := csUncheckedNormal
-    else if InvertCheck then begin
-      if ObjNode.CheckState in CheckedStates then
-        TreeObjects.CheckState[ObjNode] := csUncheckedNormal
-      else
-        TreeObjects.CheckState[ObjNode] := csCheckedNormal;
+      DoCheck := False
+    else if not TreeObjects.IsVisible[ObjNode] then
+      DoCheck := False
+    else if InvertCheck then
+      DoCheck := not (ObjNode.CheckState in CheckedStates)
+    else
+      DoCheck := (WantedType = lntNone) or (DBObj.NodeType = WantedType) or (DBObj.GroupType = WantedType);
+
+    if DoCheck then begin
+      TreeObjects.CheckState[ObjNode] := csCheckedNormal;
+      Inc(CheckedNodes);
     end
     else begin
-      if (WantedType = lntNone) or (DBObj.NodeType = WantedType) or (DBObj.GroupType = WantedType) then
-        TreeObjects.CheckState[ObjNode] := csCheckedNormal
-      else
-        TreeObjects.CheckState[ObjNode] := csUncheckedNormal;
+      TreeObjects.CheckState[ObjNode] := csUncheckedNormal;
     end;
-    if ObjNode.CheckState = csCheckedNormal then
-      Inc(CheckedNodes);
+
     TreeObjects.RepaintNode(ObjNode);
     ObjNode := TreeObjects.GetNextSibling(ObjNode);
   end;
+
+  // Update parent node's checkbox
   if CheckedNodes = 0 then
     TreeObjects.CheckState[DBNode] := csUncheckedNormal
   else if CheckedNodes = TreeObjects.ChildCount[DBNode] then

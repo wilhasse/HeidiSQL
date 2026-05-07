@@ -48,7 +48,11 @@ type
     qLockedTables, qDisableForeignKeyChecks, qEnableForeignKeyChecks,
     qOrderAsc, qOrderDesc, qGetRowCountExact, qGetRowCountApprox,
     qForeignKeyDrop, qGetTableColumns, qGetCollations, qGetCollationsExtended, qGetCharsets,
-    qGetReverseForeignKeys);
+    qGetReverseForeignKeys, qExplain, qSetTimezone,
+    qShowFunctionStatus, qShowProcedureStatus, qShowTriggers, qShowEvents, qShowCreateTrigger,
+    qHelpKeyword, qShowWarnings, qGetEnumTypes,
+    qDropUser, qCreateRole, qDropRole, qReloadPrivileges, qGrantRole, qRevokeRole, qSetDefaultRole,
+    qAutoInc, qIndexVisible, qIndexInvisible);
   TSqlProvider = class
     strict protected
       FNetType: TNetType;
@@ -206,10 +210,12 @@ function TSqlProvider.GetSql(AId: TQueryId): string;
 begin
   // Basic default SQL snippets compatible to all or most servers
   case AId of
+    qEmptyTable: Result := 'DELETE FROM %s';
     qForeignKeyEventAction: Result := 'RESTRICT,CASCADE,SET NULL,NO ACTION';
     qOrderAsc: Result := 'ASC';
     qOrderDesc: Result := 'DESC';
     qGetRowCountExact: Result := 'SELECT COUNT(*) FROM :QuotedDbAndTableName';
+    qAutoInc: Result := 'AUTO_INCREMENT';
     else Result := '';
   end;
 end;

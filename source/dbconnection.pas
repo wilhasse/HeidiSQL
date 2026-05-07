@@ -62,7 +62,6 @@ type
       function CastAsText: String;
       property Status: TEditingStatus read FStatus write SetStatus;
       property Connection: TDBConnection read FConnection;
-      function AutoIncName: String;
       function FullDataType: String;
   end;
   PTableColumn = ^TTableColumn;
@@ -89,7 +88,7 @@ type
       Name, OldName: String;
       IndexType, OldIndexType, Algorithm, Comment: String;
       Columns, SubParts, Collations: TStringList;
-      Modified, Added: Boolean;
+      Modified, Added, Visible: Boolean;
       constructor Create(AOwner: TDBConnection);
       destructor Destroy; override;
       procedure Assign(Source: TPersistent); override;
@@ -428,12 +427,20 @@ type
   TDBLogEvent = procedure(Msg: String; Category: TDBLogCategory=lcInfo; Connection: TDBConnection=nil) of object;
   TDBEvent = procedure(Connection: TDBConnection; Database: String) of object;
   TDBDataTypeArray = Array of TDBDataType;
-  TFeatureOrRequirement = (frSrid, frTimezoneVar, frTemporalTypesFraction,
-    frShowCreateTrigger, frShowWarnings,
-    frIntegerDisplayWidth, frShowFunctionStatus, frShowProcedureStatus,
-    frShowTriggers, frShowEvents, frColumnDefaultParentheses,
-    frHelpKeyword, frEditVariables, frCreateView, frCreateProcedure, frCreateFunction,
-    frCreateTrigger, frCreateEvent, frInvisibleColumns, frCompressedColumns);
+  TFeatureOrRequirement = (
+    frSrid,
+    frTemporalTypesFraction,
+    frIntegerDisplayWidth,
+    frColumnDefaultParentheses,
+    frEditVariables,
+    frCreateView,
+    frCreateProcedure,
+    frCreateFunction,
+    frCreateTrigger,
+    frCreateEvent,
+    frInvisibleColumns,
+    frCompressedColumns
+    );
 
   TDBConnection = class(TComponent)
     private
@@ -442,6 +449,7 @@ type
       FServerUptime: Integer;
       FServerDateTimeOnStartup: String;
       FParameters: TConnectionParameters;
+      FOwnsParameters: Boolean;
       FSecureShellCmd: TSecureShellCmd;
       FDatabase: String;
       FAllDatabases: TStringList;
@@ -492,6 +500,7 @@ type
       FCredentialOverrideActive: Boolean;
       FCredentialOverrideUsername: String;
       FCredentialOverridePassword: String;
+      FNamedEnums: TStringList;
       procedure SetActive(Value: Boolean); virtual; abstract;
       procedure ClearCredentialOverride;
       function GetEffectivePassword: String;
@@ -533,7 +542,9 @@ type
       destructor Destroy; override;
       function HasCredentialOverride: Boolean;
       procedure SetCredentialOverride(const UserName, Password: String);
-      procedure Query(SQL: String; DoStoreResult: Boolean=False; LogCategory: TDBLogCategory=lcSQL); virtual;
+      procedure Query(SQL: String; DoStoreResult: Boolean=False; LogCategory: TDBLogCategory=lcSQL); overload; virtual;
+      procedure Query(QueryId: TQueryId); overload;
+      procedure Query(QueryId: TQueryId; const Args: array of const); overload;
       procedure Log(Category: TDBLogCategory; Msg: String);
       function EscapeString(Text: String; ProcessJokerChars: Boolean=False; DoQuote: Boolean=True): String; overload;
       function EscapeString(Text: String; Datatype: TDBDatatype): String; overload;
@@ -576,6 +587,7 @@ type
       function ApplyLimitClause(QueryType, QueryBody: String; Limit, Offset: Int64): String;
       function LikeClauseTail: String;
       property Parameters: TConnectionParameters read FParameters write FParameters;
+      property OwnsParameters: Boolean read FOwnsParameters write FOwnsParameters;
       property ThreadId: Int64 read GetThreadId;
       property ConnectionUptime: Integer read GetConnectionUptime;
       property ServerUptime: Integer read GetServerUptime;
@@ -589,6 +601,7 @@ type
       property KeyCache: TKeyCache read FKeyCache;
       property ForeignKeyCache: TForeignKeyCache read FForeignKeyCache;
       property CheckConstraintCache: TCheckConstraintCache read FCheckConstraintCache;
+      property StringQuoteChar: Char read FStringQuoteChar;
       property QuoteChar: Char read FQuoteChar;
       property QuoteChars: String read FQuoteChars;
       function ServerVersionStr: String;
@@ -632,6 +645,7 @@ type
       property EffectivePassword: String read GetEffectivePassword;
       property EffectiveUsername: String read GetEffectiveUsername;
       property SqlProvider: TSqlProvider read FSqlProvider;
+      property NamedEnums: TStringList read FNamedEnums;
     published
       property Active: Boolean read FActive write SetActive default False;
       property Database: String read FDatabase write SetDatabase;
@@ -1021,6 +1035,8 @@ function mysql_authentication_dialog_ask(
 exports
   mysql_authentication_dialog_ask;
 
+var
+  WarningShownOldOleProvider: Boolean = False;
 
 {$I const.inc}
 
@@ -2210,6 +2226,7 @@ constructor TDBConnection.Create(AOwner: TComponent);
 begin
   inherited;
   FParameters := TConnectionParameters.Create;
+  FOwnsParameters := True;
   FRowsFound := 0;
   FRowsAffected := 0;
   FWarningCount := 0;
@@ -2242,6 +2259,9 @@ begin
   FStringQuoteChar := '''';
   FCollationTable := nil;
   FCharsetTable := nil;
+  FQuoteChar := '"';
+  FQuoteChars := '"[]';
+  FNamedEnums := TStringList.Create;
 end;
 
 
@@ -2266,8 +2286,6 @@ var
   i: Integer;
 begin
   inherited;
-  FQuoteChar := '"';
-  FQuoteChars := '"[]';
   SetLength(FDatatypes, Length(MSSQLDatatypes));
   for i:=0 to High(MSSQLDatatypes) do
     FDatatypes[i] := MSSQLDatatypes[i];
@@ -2281,7 +2299,6 @@ var
   i: Integer;
 begin
   inherited;
-  FQuoteChar := '"';
   FQuoteChars := '"';
   SetLength(FDatatypes, Length(PostGreSQLDatatypes));
   for i:=0 to High(PostGreSQLDatatypes) do
@@ -2298,8 +2315,6 @@ var
   i: Integer;
 begin
   inherited;
-  FQuoteChar := '"';
-  FQuoteChars := '"[]';
   SetLength(FDatatypes, Length(SQLiteDatatypes));
   for i:=0 to High(SQLiteDatatypes) do
     FDatatypes[i] := SQLiteDatatypes[i];
@@ -2313,8 +2328,6 @@ var
   i: Integer;
 begin
   inherited;
-  FQuoteChar := '"';
-  FQuoteChars := '"[]';
   SetLength(FDatatypes, Length(InterbaseDatatypes));
   for i:=0 to High(InterbaseDatatypes) do
     FDatatypes[i] := InterbaseDatatypes[i];
@@ -2329,7 +2342,9 @@ begin
   FKeepAliveTimer.Free;
   FFavorites.Free;
   FInformationSchemaObjects.Free;
-  FParameters.Free;
+  FNamedEnums.Free;
+  if FOwnsParameters then
+    FParameters.Free;
   inherited;
 end;
 
@@ -2444,7 +2459,7 @@ begin
       TypesSorted.Free;
     end;
 
-    rx.Expression := '^('+Types+')\b(\[\])?';
+    rx.Expression := '\b('+Types+')\b(\[\])?';
     Match := rx.Exec(DataType);
     // Prefer a later match which is longer than the one found before.
     // See http://www.heidisql.com/forum.php?t=17061
@@ -2485,25 +2500,16 @@ var
   i: Integer;
   rx: TRegExpr;
   TypeFound: Boolean;
-  TypeOid: String;
 begin
   rx := TRegExpr.Create;
   TypeFound := False;
+
   for i:=0 to High(Datatypes) do begin
-    if Datatypes[i].NativeTypes = '?' then begin
-      // PG oid is set to be populated via '?'
-      Datatypes[i].NativeTypes := '';
-      TypeOid := GetVar('SELECT oid FROM '+QuoteIdent('pg_type')+' WHERE '+QuoteIdent('typname')+' = '+EscapeString(Datatypes[i].Name.ToLower));
-      if IsNumeric(TypeOid) then begin
-        Datatypes[i].NativeTypes := TypeOid;
-        Log(lcInfo, 'Found oid/NativeTypes of '+Datatypes[i].Name+' data type: '+Datatypes[i].NativeTypes);
-      end
-      else begin
-        Log(lcInfo, 'No support for '+Datatypes[i].Name+' data type on this server.');
-      end;
-    end;
-    // Skip if native ids / oid's are (still) empty
+    // Skip if native ids / oid's are (yet) empty
     if Datatypes[i].NativeTypes.IsEmpty then
+      Continue;
+    // Skip ? and e which have a special meaning
+    if Datatypes[i].NativeTypes.Length = 1 then
       Continue;
     rx.Expression := '\b('+Datatypes[i].NativeTypes+')\b';
     if rx.Exec(IntToStr(NativeType)) then begin
@@ -2859,13 +2865,14 @@ begin
     end;
 
     IsOldProvider := Parameters.LibraryOrProvider = 'SQLOLEDB';
-    if IsOldProvider then begin
+    if IsOldProvider and (not WarningShownOldOleProvider) then begin
       MessageDialog(
         f_('Security issue: Using %s %s with insecure %s.',
           [Parameters.LibraryOrProvider, 'ADO provider', 'TLS 1.0']) +
         f_('You should install %s from %s',
           ['Microsoft OLE DB Driver', 'https://www.microsoft.com/en-us/download/confirmation.aspx?id=56730']),
         mtWarning, [mbOK]);
+      WarningShownOldOleProvider := True;
     end;
 
     NetLib := '';
@@ -3002,18 +3009,13 @@ end;
 
 procedure TPgConnection.SetActive(Value: Boolean);
 var
-  dbname, ConnectionString, OptionValue, Error: String;
+  ConnectionString, OptionValue, Error: String;
   ConnectOptions: TStringList;
   FinalHost, ErrorHint: String;
   FinalPort, i: Integer;
 begin
   if Value then begin
     DoBeforeConnect;
-    // Simon Riggs:
-    // "You should connect as "postgres" database by default, with an option to change. Don't use template1"
-    dbname := FParameters.AllDatabasesStr;
-    if dbname = '' then
-      dbname := 'postgres';
 
     // Prepare special stuff for SSH tunnel
     FinalHost := FParameters.Hostname;
@@ -3029,9 +3031,10 @@ begin
       .AddPair('port', IntToStr(FinalPort))
       .AddPair('user', EffectiveUsername)
       .AddPair('password', EffectivePassword)
-      .AddPair('dbname', dbname)
       .AddPair('application_name', APPNAME)
       .AddPair('sslmode', 'disable');
+    if not FParameters.AllDatabasesStr.IsEmpty then
+      ConnectOptions.AddPair('dbname', FParameters.AllDatabasesStr);
     if FParameters.WantSSL then begin
       // Be aware .AddPair would add duplicates
       case FParameters.SSLVerification of
@@ -3123,6 +3126,7 @@ var
   ErrorHint: String;
   FileNames, EncryptionParams: TStringList;
   MainFile, DbAlias, Param, ParamName: String;
+  MainFileDir: String;
   i, SplitPos, ParamValue: Integer;
   CipherIndex, ConfigResult: Integer;
   ParamWasSet: Boolean;
@@ -3133,8 +3137,12 @@ begin
 
   if Value then begin
     // Fixes "out of memory" crash in sqlite3_open, see issue #1367
+    MainFileDir := ExtractFilePath(MainFile);
+    MainFileDir := IncludeTrailingPathDelimiter(MainFileDir);
+    if not DirectoryExists(MainFileDir) then
+      raise EDbError.Create(f_('Folder in path does not exist: %s', [MainFile]));
     if not FileExists(MainFile) then
-      raise EDbError.Create(f_('File does not exist: %s', [MainFile]));
+      Log(lcInfo, f_('File does not yet exist, will be created now: %s', [MainFile]));
 
     DoBeforeConnect;
 
@@ -3539,13 +3547,60 @@ end;
 
 procedure TDBConnection.DoAfterConnect;
 var
+  i: Integer;
+  TypeOid: String;
+  AllEnums: TDBQuery;
+  AllEnumsList: TStringList;
   SQLFunctionsFileOrder: String;
   MajorMinorVer, MajorVer: String;
   StartupScript: String;
   StartupBatch: TSQLBatch;
   SqlQuery: TSQLSentence;
+  TZI: TTimeZoneInformation;
+  Minutes, Hours: Integer;
+  Offset: String;
 begin
   FSqlProvider.ServerVersion := ServerVersionInt;
+
+  for i:=0 to High(Datatypes) do begin
+
+    if Datatypes[i].NativeTypes = '?' then begin
+      // PG oid is set to be populated via '?'
+      TypeOid := GetVar('SELECT oid FROM '+QuoteIdent('pg_type')+' WHERE '+QuoteIdent('typname')+' = '+EscapeString(Datatypes[i].Name.ToLower));
+      if IsNumeric(TypeOid) then begin
+        Datatypes[i].NativeTypes := TypeOid;
+        Log(lcInfo, 'Found oid/NativeTypes of '+Datatypes[i].Name+' data type: '+Datatypes[i].NativeTypes);
+      end
+      else begin
+        Log(lcInfo, 'No support for '+Datatypes[i].Name+' data type on this server.');
+      end;
+    end
+
+    else if (Datatypes[i].NativeTypes = 'e') and FSqlProvider.Has(qGetEnumTypes) then begin
+      // PG ENUM types populated via 'e'
+      AllEnums := GetResults(FSqlProvider.GetSql(qGetEnumTypes));
+      AllEnumsList := TStringList.Create;
+      while not AllEnums.Eof do begin
+        AllEnumsList.Add(AllEnums.Col('enum_name'));
+        AllEnumsList.Add(AllEnums.Col('enum_schema') + '.' + AllEnums.Col('enum_name'));
+        FNamedEnums.AddPair(
+          AllEnums.Col('enum_name'),
+          AllEnums.Col('enum_labels')
+          );
+        FNamedEnums.AddPair(
+          AllEnums.Col('enum_schema') + '.' + AllEnums.Col('enum_name'),
+          AllEnums.Col('enum_labels')
+          );
+        AllEnums.Next;
+      end;
+      AllEnums.Free;
+      Datatypes[i].Names := Implode('|', AllEnumsList);
+      AllEnumsList.Free;
+    end;
+
+  end;
+
+
   AppSettings.SessionPath := FParameters.SessionPath;
   AppSettings.WriteString(asServerVersionFull, FServerVersionUntouched);
   FParameters.ServerVersion := FServerVersionUntouched;
@@ -3578,6 +3633,25 @@ begin
     SQLFunctionsFileOrder := '';
   FSQLFunctions := TSQLFunctionList.Create(Self, SQLFunctionsFileOrder);
 
+  // Set timezone offset to UTC
+  if FSqlProvider.Has(qSetTimezone) and Parameters.LocalTimeZone then begin
+    Minutes := 0;
+    case GetTimeZoneInformation(TZI) of
+      TIME_ZONE_ID_STANDARD: Minutes := (TZI.Bias + TZI.StandardBias);
+      TIME_ZONE_ID_DAYLIGHT: Minutes := (TZI.Bias + TZI.DaylightBias);
+      TIME_ZONE_ID_UNKNOWN: Minutes := TZI.Bias;
+      else RaiseLastOSError;
+    end;
+    Hours := Minutes div 60;
+    Minutes := Minutes mod 60;
+    if Hours < 0 then
+      Offset := '+'
+    else
+      Offset := '-';
+    Offset := Offset + Format('%.2d:%.2d', [Abs(Hours), Abs(Minutes)]);
+    Query(qSetTimezone, [EscapeString(Offset)]);
+  end;
+
   // Process startup script
   StartupScript := Trim(FParameters.StartupScriptFilename);
   if StartupScript <> '' then begin
@@ -3600,31 +3674,10 @@ end;
 
 procedure TMySQLConnection.DoAfterConnect;
 var
-  TZI: TTimeZoneInformation;
-  Minutes, Hours, i: Integer;
-  Offset: String;
   ObjNames: TStringList;
+  i: Integer;
 begin
   inherited;
-
-  // Set timezone offset to UTC
-  if Has(frTimezoneVar) and Parameters.LocalTimeZone then begin
-    Minutes := 0;
-    case GetTimeZoneInformation(TZI) of
-      TIME_ZONE_ID_STANDARD: Minutes := (TZI.Bias + TZI.StandardBias);
-      TIME_ZONE_ID_DAYLIGHT: Minutes := (TZI.Bias + TZI.DaylightBias);
-      TIME_ZONE_ID_UNKNOWN: Minutes := TZI.Bias;
-      else RaiseLastOSError;
-    end;
-    Hours := Minutes div 60;
-    Minutes := Minutes mod 60;
-    if Hours < 0 then
-      Offset := '+'
-    else
-      Offset := '-';
-    Offset := Offset + Format('%.2d:%.2d', [Abs(Hours), Abs(Minutes)]);
-    Query('SET time_zone='+EscapeString(Offset));
-  end;
 
   // Support microseconds in some temporal datatypes of MariaDB 5.3+ and MySQL 5.6
   if Has(frTemporalTypesFraction) then begin
@@ -3829,6 +3882,17 @@ begin
   FRowsFound := 0;
   FRowsAffected := 0;
   FWarningCount := 0;
+end;
+
+
+procedure TDBConnection.Query(QueryId: TQueryId);
+begin
+  Query(FSqlProvider.GetSql(QueryId));
+end;
+
+procedure TDBConnection.Query(QueryId: TQueryId; const Args: array of const);
+begin
+  Query(FSqlProvider.GetSql(QueryId, Args));
 end;
 
 
@@ -4501,7 +4565,7 @@ begin
         // SHOW CREATE TRIGGER was introduced in MySQL 5.1.21
         // See #111
         if Obj.NodeType = lntTrigger then
-          UseIt := UseIt and Has(frShowCreateTrigger);
+          UseIt := UseIt and FSqlProvider.Has(qShowCreateTrigger);
         if UseIt then
           Queries.Add('SHOW CREATE '+UpperCase(Obj.ObjType)+' '+QuoteIdent(Obj.Database)+'.'+QuoteIdent(Obj.Name));
       end;
@@ -4533,7 +4597,6 @@ end;
 procedure TDBConnection.SetDatabase(Value: String);
 var
   s: String;
-  UseQuery: String;
 begin
   Log(lcDebug, 'SetDatabase('+Value+'), FDatabase: '+FDatabase);
   if Value <> FDatabase then begin
@@ -4553,9 +4616,8 @@ begin
           s := s + ', ' + EscapeString('public');
       end else
         s := QuoteIdent(Value);
-      UseQuery := FSqlProvider.GetSql(qUSEQuery);
-      if not UseQuery.IsEmpty then begin
-        Query(FSqlProvider.GetSql(qUSEQuery, [s]), False);
+      if FSqlProvider.Has(qUSEQuery) then begin
+        Query(qUSEQuery, [s]);
       end;
       FDatabase := DeQuoteIdent(Value);
       if Assigned(FOnDatabaseChanged) then
@@ -4938,8 +5000,8 @@ var
 begin
   // Log warnings
   // SHOW WARNINGS is implemented as of MySQL 4.1.0
-  if (WarningCount > 0) and Has(frShowWarnings) then begin
-    Warnings := GetResults('SHOW WARNINGS');
+  if (WarningCount > 0) and FSqlProvider.Has(qShowWarnings) then begin
+    Warnings := GetResults(FSqlProvider.GetSql(qShowWarnings));
     while not Warnings.Eof do begin
       Log(lcError, _(Warnings.Col('Level')) + ': ('+Warnings.Col('Code')+') ' + Warnings.Col('Message'));
       Warnings.Next;
@@ -5982,7 +6044,7 @@ begin
     else if ExecRegExpr('\bauto_increment\b', ExtraText.ToLowerInvariant) then begin
       // MySQL auto increment
       Col.DefaultType := cdtAutoInc;
-      Col.DefaultText := Col.AutoIncName;
+      Col.DefaultText := FSqlProvider.GetSql(qAutoInc);
     end
     else if DefText.ToLowerInvariant = 'null' then begin
       Col.DefaultType := cdtNull;
@@ -6070,7 +6132,7 @@ begin
       Col.OnUpdateType := cdtNothing;
       if ExecRegExpr('^auto_increment$', ExtraText.ToLowerInvariant) then begin
         Col.DefaultType := cdtAutoInc;
-        Col.DefaultText := Col.AutoIncName;
+        Col.DefaultText := FSqlProvider.GetSql(qAutoInc);
       end else if ColQuery.IsNull('Default') then begin
         Col.DefaultType := cdtNothing;
       end else if IsTextDefault(DefText, Col.DataType) then begin
@@ -6314,6 +6376,10 @@ begin
         if ExecRegExpr('(BTREE|HASH)', KeyQuery.Col('Index_type')) then
           NewKey.Algorithm := KeyQuery.Col('Index_type');
         NewKey.Comment := KeyQuery.Col('Index_comment', True);
+        if KeyQuery.ColumnExists('Visible') then // mysql 8
+          NewKey.Visible := SameText(KeyQuery.Col('Visible'), 'yes')
+        else if KeyQuery.ColumnExists('Ignored') then // mariadb 10.6
+          NewKey.Visible := SameText(KeyQuery.Col('Ignored'), 'NO');
       end;
       if KeyQuery.ColumnExists('Expression') and (not KeyQuery.IsNull('Expression')) then begin
         // Functional key part: enclose expression within parentheses to distinguish them from columns (issue #1777)
@@ -6809,19 +6875,11 @@ begin
     ngMySQL:
       case Item of
         frSrid: Result := FParameters.IsMySQL(True) and (ServerVersionInt >= 80000);
-        frTimezoneVar: Result := ServerVersionInt >= 40103;
         frTemporalTypesFraction: Result := (FParameters.IsMariaDB and (ServerVersionInt >= 50300)) or
           (FParameters.IsMySQL(True) and (ServerVersionInt >= 50604));
-        frShowCreateTrigger: Result := ServerVersionInt >= 50121;
-        frShowWarnings: Result := ServerVersionInt >= 40100;
         frIntegerDisplayWidth: Result := (FParameters.IsMySQL(True) and (ServerVersionInt < 80017)) or
           (not FParameters.IsMySQL(True));
-        frShowFunctionStatus: Result := (not Parameters.IsProxySQLAdmin) and (ServerVersionInt >= 50000);
-        frShowProcedureStatus: Result := (not FParameters.IsProxySQLAdmin) and (ServerVersionInt >= 50000);
-        frShowTriggers: Result := (not FParameters.IsProxySQLAdmin) and (ServerVersionInt >= 50010);
-        frShowEvents: Result := (not Parameters.IsProxySQLAdmin) and (ServerVersionInt >= 50100);
         frColumnDefaultParentheses: Result := FParameters.IsMySQL(True) and (ServerVersionInt >= 80013);
-        frHelpKeyword: Result := (not FParameters.IsProxySQLAdmin) and (ServerVersionInt >= 40100);
         frEditVariables: Result := ServerVersionInt >= 40003;
         frCreateView: Result := ServerVersionInt >= 50001;
         frCreateProcedure: Result := ServerVersionInt >= 50003;
@@ -7280,8 +7338,8 @@ begin
   end;
 
   // Stored functions
-  if Has(frShowFunctionStatus) then try
-    Results := GetResults('SHOW FUNCTION STATUS WHERE '+QuoteIdent('Db')+'='+EscapeString(db));
+  if FSqlProvider.Has(qShowFunctionStatus) then try
+    Results := GetResults(FSqlProvider.GetSql(qShowFunctionStatus, [EscapeString(db)]));
   except
     on E:EDbError do;
   end;
@@ -7301,8 +7359,8 @@ begin
   end;
 
   // Stored procedures
-  if Has(frShowProcedureStatus) then try
-    Results := GetResults('SHOW PROCEDURE STATUS WHERE '+QuoteIdent('Db')+'='+EscapeString(db));
+  if FSqlProvider.Has(qShowProcedureStatus) then try
+    Results := GetResults(FSqlProvider.GetSql(qShowProcedureStatus, [EscapeString(db)]));
   except
     on E:EDbError do;
   end;
@@ -7322,8 +7380,8 @@ begin
   end;
 
   // Triggers
-  if Has(frShowTriggers) then try
-    Results := GetResults('SHOW TRIGGERS FROM '+QuoteIdent(db));
+  if FSqlProvider.Has(qShowTriggers) then try
+    Results := GetResults(FSqlProvider.GetSql(qShowTriggers, [QuoteIdent(db)]));
   except
     on E:EDbError do;
   end;
@@ -7342,9 +7400,8 @@ begin
   end;
 
   // Events
-  if Has(frShowEvents) then try
-    Results := GetResults('SELECT *, EVENT_SCHEMA AS '+QuoteIdent('Db')+', EVENT_NAME AS '+QuoteIdent('Name')+
-      ' FROM '+InfSch+'.'+QuoteIdent('EVENTS')+' WHERE '+QuoteIdent('EVENT_SCHEMA')+'='+EscapeString(db))
+  if FSqlProvider.Has(qShowEvents) then try
+    Results := GetResults(FSqlProvider.GetSql(qShowEvents, [EscapeString(db)]));
   except
     on E:EDbError do begin
       try
@@ -9138,8 +9195,8 @@ begin
       SetString(AnsiStr, FConnection.Lib.PQgetvalue(FCurrentResults, FRecNoLocal, Column), FColumnLengths[Column]);
       if Datatype(Column).Category in [dtcBinary, dtcSpatial] then
         Result := String(AnsiStr)
-      else if Datatype(Column).Index = dbdtBool then
-        if AnsiStr='t' then Result := 'true' else Result := 'false'
+      else if (Datatype(Column).Index = dbdtBool) and (Length(AnsiStr) > 0) then
+        Result := IfThen(AnsiStr='t', 'true', 'false')
       else
         Result := Connection.DecodeAPIString(AnsiStr);
     end;
@@ -9254,19 +9311,33 @@ var
   i: Integer;
 begin
   Result := TStringList.Create;
-  Result.QuoteChar := '''';
-  Result.Delimiter := ',';
   ColAttr := ColAttributes(Column);
   if Assigned(ColAttr) then case ColAttr.DataType.Index of
+
     dbdtEnum, dbdtSet: begin
-      Result.DelimitedText := ColAttr.LengthSet;
-      // Take care for escaped ENUM definitions, see issue #799
+      // Lool up PostgreSQL enum labels in prefetched list
+      i := FConnection.NamedEnums.IndexOfName(ColAttr.LengthSet);
+      if i > -1 then begin
+        Result.Delimiter := '|';
+        Result.DelimitedText := FConnection.NamedEnums.ValueFromIndex[i];
+      end
+      else begin
+        // .. or in MySQL Length/Set
+        Result.QuoteChar := '''';
+        Result.Delimiter := ',';
+        Result.DelimitedText := ColAttr.LengthSet;
+      end;
+      // In any case, take care for escaped ENUM definitions, see issue #799
       for i:=0 to Result.Count-1 do begin
         Result[i] := FConnection.UnescapeString(Result[i]);
       end;
     end;
-    dbdtBool:
+
+    dbdtBool: begin
+      Result.Delimiter := ',';
       Result.DelimitedText := 'true,false';
+    end;
+
   end;
 end;
 
@@ -10853,6 +10924,7 @@ begin
   FMap.Add('QuotedDatabase', QuotedDatabase);
   FMap.Add('QuotedName', QuotedName);
   FMap.Add('QuotedDbAndTableName', QuotedDbAndTableName);
+  FMap.Add('ObjType', UpperCase(ObjType));
   Result := FMap;
 end;
 
@@ -11025,25 +11097,29 @@ begin
   end;
 
   if InParts(cpType) then begin
-    case FConnection.Parameters.NetTypeGroup of
-      ngPgSQL: begin
-        if DefaultType = cdtAutoInc then
-          Result := Result + 'SERIAL'
-        else
-          Result := Result + DataType.Name;
-      end;
-      else Result := Result + DataType.Name;
-    end;
 
-    if (LengthSet <> '') and DataType.HasLength then
-      Result := Result + '(' + LengthSet + ')';
-    if (DataType.Category in [dtcInteger, dtcReal]) and Unsigned then
-      Result := Result + ' UNSIGNED';
-    if (DataType.Category in [dtcInteger, dtcReal]) and ZeroFill then
-      Result := Result + ' ZEROFILL';
-    if Compressed and FConnection.Parameters.IsMariaDB then
-      Result := Result + ' /*!100301 COMPRESSED*/';
-    Result := Result + ' '; // Add space after each part
+    if FConnection.Parameters.IsAnyPostgreSQL and (DefaultType = cdtAutoInc) then begin
+      Result := Result + 'SERIAL';
+    end
+    else begin
+
+      if (DataType.Index = dbdtEnum) and (FConnection.NamedEnums.IndexOfName(LengthSet) > -1) then begin
+        Result := Result + LengthSet;
+      end
+      else begin
+        Result := Result + DataType.Name;
+        if (LengthSet <> '') and DataType.HasLength then
+          Result := Result + '(' + LengthSet + ')';
+      end;
+
+      if (DataType.Category in [dtcInteger, dtcReal]) and Unsigned then
+        Result := Result + ' UNSIGNED';
+      if (DataType.Category in [dtcInteger, dtcReal]) and ZeroFill then
+        Result := Result + ' ZEROFILL';
+      if Compressed and FConnection.Parameters.IsMariaDB then
+        Result := Result + ' /*!100301 COMPRESSED*/';
+      Result := Result + ' '; // Add space after each part
+    end;
   end;
 
   if InParts(cpAllowNull) and (not IsVirtual) and (not FConnection.Parameters.IsAnyMSSQL) then begin
@@ -11068,7 +11144,7 @@ begin
         cdtAutoInc: begin
           case FConnection.Parameters.NetTypeGroup of
             ngPgSQL:;
-            else Result := Result + AutoIncName;
+            else Result := Result + FConnection.SqlProvider.GetSql(qAutoInc);
           end;
         end;
         cdtExpression: begin
@@ -11134,7 +11210,9 @@ procedure TTableColumn.ParseDatatype(Source: String);
 var
   InLiteral: Boolean;
   ParenthLeft, i: Integer;
+  OrgSource: String;
 begin
+  OrgSource := Source;
   DataType := Connection.GetDatatypeByName(Source, True);
   // Length / Set
   // Various datatypes, e.g. BLOBs, don't have any length property
@@ -11152,6 +11230,11 @@ begin
       LengthSet := '';
   end else begin
     LengthSet := '';
+    if DataType.Index = dbdtEnum then begin
+      // Assign PostgreSQL enum type to LengthSet, so we can provide it in table editor
+      // Some enum types are wrapped in double quotes
+      LengthSet := OrgSource.Trim([FConnection.QuoteChar]);
+    end;
   end;
   Unsigned :=  ExecRegExpr('\bunsigned\b', Source.ToLowerInvariant);
   ZeroFill := ExecRegExpr('\bzerofill\b', Source.ToLowerInvariant);
@@ -11182,20 +11265,15 @@ begin
 end;
 
 
-function TTableColumn.AutoIncName: String;
-begin
-  case FConnection.Parameters.NetTypeGroup of
-    ngPgSQL: Result := 'SERIAL';
-    else Result := 'AUTO_INCREMENT';
-  end;
-end;
-
-
 function TTableColumn.FullDataType: String;
 begin
   Result := DataType.Name;
-  if not LengthSet.IsEmpty then
-    Result := Result + '(' + LengthSet + ')';
+  if not LengthSet.IsEmpty then begin
+    if (DataType.Index = dbdtEnum) and (FConnection.NamedEnums.IndexOfName(LengthSet) > -1) then
+      Result := LengthSet
+    else
+      Result := Result + '(' + LengthSet + ')';
+  end;
 end;
 
 
@@ -11238,6 +11316,7 @@ begin
   Columns.OnChange := Modification;
   Subparts.OnChange := Modification;
   Collations.OnChange := Modification;
+  Visible := True;
 end;
 
 destructor TTableKey.Destroy;
@@ -11260,6 +11339,7 @@ begin
     OldIndexType := s.OldIndexType;
     Algorithm := s.Algorithm;
     Comment := s.Comment;
+    Visible := s.Visible;
     Columns.Assign(s.Columns);
     SubParts.Assign(s.SubParts);
     Collations.Assign(s.Collations);
@@ -11377,6 +11457,7 @@ begin
 
     if not Comment.IsEmpty then
       Result := Result + ' COMMENT ' + FConnection.EscapeString(Comment);
+
   end
   else begin
     // SQLite syntax:

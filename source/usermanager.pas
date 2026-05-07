@@ -7,7 +7,8 @@ uses
   Winapi.Windows, Winapi.Messages, System.SysUtils, System.Classes, Vcl.Graphics, Vcl.Controls, Vcl.Forms, Vcl.Dialogs, Vcl.ComCtrls, Vcl.StdCtrls,
   Vcl.ExtCtrls, Vcl.ToolWin, Vcl.ClipBrd, System.Generics.Collections, System.Generics.Defaults, SynRegExpr, extra_controls,
   dbconnection, dbstructures, dbstructures.mysql, apphelpers, VirtualTrees.BaseTree, VirtualTrees.Types, VirtualTrees, VirtualTrees.EditLink, Vcl.Menus, gnugettext,
-  VirtualTrees.BaseAncestorVCL, VirtualTrees.AncestorVCL;
+  VirtualTrees.BaseAncestorVCL, VirtualTrees.AncestorVCL, StrUtils, Vcl.Grids,
+  Vcl.ValEdit;
 
 {$I const.inc}
 
@@ -31,16 +32,29 @@ type
   TUserProblem = (upNone, upEmptyPassword, upInvalidPasswordLen, upSkipNameResolve, upUnknown);
 
   TUser = class(TObject)
-    Username, Host, Password, Cipher, Issuer, Subject: String;
+    Username, Host, Password, Cipher, Issuer, Subject, DefaultRole: String;
     MaxQueries, MaxUpdates, MaxConnections, MaxUserConnections, SSL: Integer;
     Problem: TUserProblem;
+    IsRole: Boolean;
+    Roles: TStringList;
     public
+      class var RoleNo: String;
+      class var RoleYes: String;
+      class var RoleYesAdmin: String;
       constructor Create;
+      destructor Destroy; override;
       function HostRequiresNameResolve: Boolean;
       procedure ParseSettings(GrantOrCreate: String; Priv: TPrivObj);
+      function IsUser: Boolean;
+      function AssignedRolesCount: Integer;
   end;
   PUser = ^TUser;
-  TUserList = TObjectList<TUser>;
+  TUserList = class(TObjectList<TUser>)
+    public
+      function GetRoleNames: TStringList; overload;
+      procedure GetRoleNames(Strings: TStrings); overload;
+      function GetDefaultRoles(ExcludeRole: TUser): TStringList;
+  end;
 
   EInputError = class(Exception);
 
@@ -51,9 +65,6 @@ type
     listUsers: TVirtualStringTree;
     Splitter1: TSplitter;
     pnlRight: TPanel;
-    tlbObjects: TToolBar;
-    btnAddObject: TToolButton;
-    treePrivs: TVirtualStringTree;
     btnDiscard: TButton;
     lblUsers: TLabel;
     ToolBar1: TToolBar;
@@ -61,7 +72,6 @@ type
     btnDeleteUser: TToolButton;
     btnCloneUser: TToolButton;
     lblWarning: TLabel;
-    lblAllowAccessTo: TLabel;
     menuHost: TPopupMenu;
     menuHost1: TMenuItem;
     menuHostLocal4: TMenuItem;
@@ -112,9 +122,21 @@ type
     comboSSL: TComboBox;
     lblSSL: TLabel;
     editFilterUsers: TButtonedEdit;
+    menuAdd: TPopupMenu;
+    menuItemUser: TMenuItem;
+    menuItemRole: TMenuItem;
+    PageControlAccess: TPageControl;
+    tabPrivileges: TTabSheet;
+    tabRoles: TTabSheet;
+    treePrivs: TVirtualStringTree;
+    tlbObjects: TToolBar;
+    btnAddObject: TToolButton;
+    ValueListEditorRoles: TValueListEditor;
+    lblDefaultRole: TLabel;
+    comboDefaultRole: TComboBox;
     procedure FormCreate(Sender: TObject);
     procedure FormShow(Sender: TObject);
-    procedure btnAddUserClick(Sender: TObject);
+    procedure menuItemUserClick(Sender: TObject);
     procedure btnDeleteUserClick(Sender: TObject);
     procedure listUsersFocusChanged(Sender: TBaseVirtualTree; Node: PVirtualNode;
       Column: TColumnIndex);
@@ -157,13 +179,19 @@ type
     procedure listUsersHotChange(Sender: TBaseVirtualTree; OldNode, NewNode: PVirtualNode);
     procedure udMaxQueriesClick(Sender: TObject; Button: TUDBtnType);
     procedure comboSSLChange(Sender: TObject);
-    procedure FormResize(Sender: TObject);
     procedure editFilterUsersRightButtonClick(Sender: TObject);
     procedure editFilterUsersChange(Sender: TObject);
+    procedure menuItemRoleClick(Sender: TObject);
+    procedure menuAddPopup(Sender: TObject);
+    procedure ValueListEditorRolesGetPickList(Sender: TObject;
+      const KeyName: string; Values: TStrings);
+    procedure ValueListEditorRolesSetEditText(Sender: TObject; ACol,
+      ARow: LongInt; const Value: string);
   private
     { Private declarations }
     FUsers: TUserList;
     FModified, FAdded: Boolean;
+    FHasIsRole, FHasDefaultRole: Boolean;
     FCloneGrants: TStringList;
     FPrivObjects: TPrivObjList;
     FPrivsGlobal, FPrivsDb, FPrivsTable, FPrivsRoutine, FPrivsColumn: TStringList;
@@ -172,6 +200,7 @@ type
     procedure SetModified(Value: Boolean);
     property Modified: Boolean read FModified write SetModified;
     function GetPrivByNode(Node: PVirtualNode): TPrivObj;
+    function SelectUserNode(User: TUser): Boolean;
   public
     { Public declarations }
   end;
@@ -224,13 +253,10 @@ begin
     'REPLICATION SLAVE ADMIN,SET USER,SLAVE MONITOR');
   FixVT(listUsers);
   FixVT(treePrivs);
-end;
-
-
-procedure TUserManagerForm.FormResize(Sender: TObject);
-begin
-  // Manually right align "Add object" button
-  lblAllowAccessTo.Width := pnlRight.Width - btnAddObject.Width;
+  FHasIsRole := False;
+  FHasDefaultRole := False;
+  menuItemUser.ImageIndex := ICONINDEX_USER;
+  menuItemRole.ImageIndex := ICONINDEX_ROLE;
 end;
 
 
@@ -239,10 +265,9 @@ var
   Version, i: Integer;
   Users: TDBQuery;
   U: TUser;
-  tmp, PasswordExpr: String;
+  tmp, PasswordExpr, IsRoleExpr, DefaultRoleExpr: String;
   SkipNameResolve,
-  HasPassword,
-  HasAuthString,
+  HasPassword, HasAuthString: Boolean;
   PasswordLengthMatters: Boolean;
   UserTableColumns: TStringList;
 
@@ -360,12 +385,20 @@ begin
     tmp := FConnection.GetSessionVariable('skip_name_resolve');
     SkipNameResolve := LowerCase(tmp) = 'on';
 
-    FConnection.Query('FLUSH PRIVILEGES');
+    try
+      FConnection.Query(qReloadPrivileges);
+    except
+      // FLUSH PRIVILEGE may fail due to missing RELOAD privilege.
+      // Proceed anyway, it's still ok to read/see the users
+      on E:EDbError do;
+    end;
 
     // Peek into user table structure, and find out where the password hash is stored
     UserTableColumns := FConnection.GetCol('SHOW COLUMNS FROM '+FConnection.QuoteIdent('mysql')+'.'+FConnection.QuoteIdent('user'));
     HasPassword := UserTableColumns.IndexOf('password') > -1;
     HasAuthString := UserTableColumns.IndexOf('authentication_string') > -1;
+    FHasIsRole := UserTableColumns.IndexOf('is_role') > -1;
+    FHasDefaultRole := UserTableColumns.IndexOf('default_role') > -1;
     if HasPassword and (not HasAuthString) then
       PasswordExpr := 'password'
     else if (not HasPassword) and HasAuthString then
@@ -375,32 +408,46 @@ begin
     else
       Raise Exception.Create(_('No password hash column available'));
     PasswordExpr := PasswordExpr + ' AS ' + FConnection.QuoteIdent('password');
+    IsRoleExpr := IfThen(FHasIsRole, 'is_role', FConnection.EscapeString('N')+' AS is_role');
+    DefaultRoleExpr := IfThen(FHasDefaultRole, 'default_role', FConnection.EscapeString('')+' AS default_role');
 
     Users := FConnection.GetResults(
-      'SELECT '+FConnection.QuoteIdent('user')+', '+FConnection.QuoteIdent('host')+', '+PasswordExpr+' '+
+      'SELECT '+
+      FConnection.QuoteIdent('user') + ', ' +
+      FConnection.QuoteIdent('host') + ', ' +
+      PasswordExpr + ', ' +
+      IsRoleExpr + ', ' +
+      DefaultRoleExpr + ' ' +
       'FROM '+FConnection.QuoteIdent('mysql')+'.'+FConnection.QuoteIdent('user')
       );
     FUsers := TUserList.Create(True);
+    ValueListEditorRoles.Strings.Clear;
     while not Users.Eof do begin
       U := TUser.Create;
       U.Username := Users.Col('user');
       U.Host := Users.Col('host');
       U.Password := Users.Col('password');
+      U.IsRole := UpperCase(Users.Col('is_role')) = 'Y';
+      U.DefaultRole := Users.Col('default_role');
       U.Problem := upNone;
-      if Length(U.Password) = 0 then
-        U.Problem := upEmptyPassword;
-      if PasswordLengthMatters and (not (Length(U.Password) in [0, 16, 41])) then
-        U.Problem := upInvalidPasswordLen
-      else if SkipNameResolve and U.HostRequiresNameResolve then
-        U.Problem := upSkipNameResolve;
+      if U.IsUser then begin
+        if Length(U.Password) = 0 then
+          U.Problem := upEmptyPassword;
+        if PasswordLengthMatters and (not (Length(U.Password) in [0, 16, 41])) then
+          U.Problem := upInvalidPasswordLen
+        else if SkipNameResolve and U.HostRequiresNameResolve then
+          U.Problem := upSkipNameResolve;
+      end;
       FUsers.Add(U);
       Users.Next;
     end;
+
     listUsers.Clear;
     InvalidateVT(listUsers, VTREE_NOTLOADED, False);
     FPrivObjects := TPrivObjList.Create(TPrivComparer.Create, True);
     Modified := False;
     FAdded := False;
+    tabRoles.TabVisible := FHasIsRole;
     listUsers.OnFocusChanged(listUsers, listUsers.FocusedNode, listUsers.FocusedColumn);
   except
     on E:EDbError do begin
@@ -472,6 +519,20 @@ begin
 end;
 
 
+procedure TUserManagerForm.ValueListEditorRolesGetPickList(Sender: TObject;
+  const KeyName: string; Values: TStrings);
+begin
+  Values.Add(TUser.RoleNo);
+  Values.Add(TUser.RoleYes);
+  Values.Add(TUser.RoleYesAdmin);
+end;
+
+procedure TUserManagerForm.ValueListEditorRolesSetEditText(Sender: TObject;
+  ACol, ARow: LongInt; const Value: string);
+begin
+  Modification(Sender);
+end;
+
 procedure TUserManagerForm.listUsersAfterPaint(Sender: TBaseVirtualTree; TargetCanvas: TCanvas);
 begin
   // Background painting for sorted column
@@ -513,6 +574,7 @@ begin
       end;
       mrNo: begin
         Allowed := True;
+        Modified := False;
         if FAdded then
           btnDeleteUser.Click;
       end;
@@ -527,15 +589,17 @@ procedure TUserManagerForm.listUsersFocusChanged(Sender: TBaseVirtualTree; Node:
 var
   P, Ptmp, PCol: TPrivObj;
   User: PUser;
-  UserHost, Msg, CreateUser: String;
-  Grants, AllPNames, Cols: TStringList;
+  UserHost, UserHostRx, Msg, CreateUser, RxQuotes: String;
+  Grants, AllPNames, Cols, RoleNames, DefaultRoles: TStringList;
   rxTemp, rxGrant: TRegExpr;
   i, j: Integer;
   UserSelected: Boolean;
   Obj: TDBObject;
 begin
   // Parse and display privileges of focused user
+  listUsers.TrySetFocus; // Steal focus from roles, prevents empty cell bug
   UserSelected := Assigned(Node);
+  User := nil;
   FPrivObjects.Clear;
   Caption := MainForm.actUserManager.Caption;
   editUsername.Clear;
@@ -543,6 +607,10 @@ begin
   editPassword.Clear;
   editPassword.TextHint := '';
   editRepeatPassword.Clear;
+  comboDefaultRole.Items.Clear;
+  comboDefaultRole.Items.Add(_('None'));
+  FUsers.GetRoleNames(comboDefaultRole.Items);
+  comboDefaultRole.ItemIndex := 0;
   udMaxQueries.Position := 0;
   udMaxUpdates.Position := 0;
   udMaxConnections.Position := 0;
@@ -552,12 +620,25 @@ begin
   editCipher.Clear;
   editIssuer.Clear;
   editSubject.Clear;
+  tabPrivileges.Caption := _('Privileges');
+  tabRoles.Caption := _('Roles');
+  // All possible quote chars, escaped for RegExpr. Todo: use in all relevant expressions.
+  RxQuotes := '['+QuoteRegExprMetaChars(FConnection.QuoteChars + FConnection.StringQuoteChar)+']';
 
   if UserSelected then begin
     User := Sender.GetNodeData(Node);
-    UserHost := FConnection.EscapeString(User.Username)+'@'+FConnection.EscapeString(User.Host);
+    UserHost := FConnection.EscapeString(User.Username);
+    UserHostRx := RxQuotes + '?' + QuoteRegExprMetaChars(User.Username) + RxQuotes + '?';
+    if User.IsUser then begin
+      UserHost := UserHost + '@' + FConnection.EscapeString(User.Host);
+      UserHostRx := UserHostRx + '@' + RxQuotes + '?' + QuoteRegExprMetaChars(User.Host) + RxQuotes + '?';
+    end;
     editUsername.Text := User.Username;
     editFromHost.Text := User.Host;
+    i := comboDefaultRole.Items.IndexOf(User.DefaultRole);
+    if i > -1 then
+      comboDefaultRole.ItemIndex := i;
+
     Caption := Caption + ' - ' + User.Username;
 
     AllPNames := TStringList.Create;
@@ -709,9 +790,39 @@ begin
       end;
     end;
 
+    // Find roles assigned to user or role:
+    // GRANT role_admin TO 'root'@'127.0.0.1';
+    // GRANT 'role space' TO 'root'@'127.0.0.1';
+    // GRANT role_space to 'role_admin' WITH ADMIN OPTION;
+    DefaultRoles := FUsers.GetDefaultRoles(User^);
+    User.Roles.Assign(DefaultRoles);
+    RoleNames := FUsers.GetRoleNames;
+    for i:=0 to RoleNames.Count-1 do begin
+      RoleNames[i] := QuoteRegExprMetaChars(RoleNames[i]);
+    end;
+    rxGrant.Expression := '^GRANT\s+'+RxQuotes+'?('+Implode('|', RoleNames)+')'+RxQuotes+'?\s+'+
+      'TO\s+'+UserHostRx+'(\s+WITH ADMIN OPTION)?$';
+    for i:=0 to Grants.Count-1 do begin
+      // Find selected priv objects via regular expression
+      if not rxGrant.Exec(Grants[i]) then begin
+        Continue;
+      end;
+      j := User.Roles.IndexOfName(rxGrant.Match[1]);
+      if j > -1 then begin
+        if rxGrant.MatchLen[2] > 0 then
+          User.Roles.ValueFromIndex[j] := User.RoleYesAdmin
+        else
+          User.Roles.ValueFromIndex[j] := User.RoleYes;
+      end;
+    end;
+    ValueListEditorRoles.BeginUpdate;
+    ValueListEditorRoles.Strings.Assign(User.Roles);
+    ValueListEditorRoles.EndUpdate;
+    DefaultRoles.Free;
 
+    // Parse general user options
     CreateUser := '';
-    try
+    if User.IsUser then try
       CreateUser := FConnection.GetVar('SHOW CREATE USER '+UserHost);
       User.ParseSettings(CreateUser, nil);
     except
@@ -727,6 +838,8 @@ begin
     editCipher.Text := User.Cipher;
     editIssuer.Text := User.Issuer;
     editSubject.Text := User.Subject;
+    tabPrivileges.Caption := _('Privileges') + ' (' + FPrivObjects.Count.ToString + ')';
+    tabRoles.Caption := _('Roles') + ' (' + User.AssignedRolesCount.ToString + ')';
 
 
     // Generate grant code for column privs by hand
@@ -759,18 +872,20 @@ begin
   treePrivs.Invalidate;
 
   // Enable input boxes
-  lblUsername.Enabled := UserSelected;
-  editUsername.Enabled := UserSelected;
-  lblFromHost.Enabled := UserSelected;
-  editFromHost.Enabled := UserSelected;
-  lblPassword.Enabled := UserSelected;
-  editPassword.Enabled := UserSelected;
-  lblRepeatPassword.Enabled := UserSelected;
-  editRepeatPassword.Enabled := UserSelected;
+  lblUsername.Enabled := UserSelected and User.IsUser;
+  editUsername.Enabled := UserSelected and User.IsUser;
+  lblFromHost.Enabled := UserSelected and User.IsUser;
+  editFromHost.Enabled := UserSelected and User.IsUser;
+  lblPassword.Enabled := UserSelected and User.IsUser;
+  editPassword.Enabled := UserSelected and User.IsUser;
+  lblRepeatPassword.Enabled := UserSelected and User.IsUser;
+  editRepeatPassword.Enabled := UserSelected and User.IsUser;
+  comboDefaultRole.Enabled := UserSelected and User.IsUser and FHasDefaultRole;
+  lblDefaultRole.Enabled := comboDefaultRole.Enabled;
   tabCredentials.Enabled := UserSelected;
-  lblMaxQueries.Enabled := UserSelected and (FConnection.ServerVersionInt >= 40002);
+  lblMaxQueries.Enabled := UserSelected and User.IsUser and (FConnection.ServerVersionInt >= 40002);
 
-  tabLimitations.Enabled := UserSelected;
+  tabLimitations.Enabled := UserSelected and User.IsUser;
   editMaxQueries.Enabled := lblMaxQueries.Enabled;
   udMaxQueries.Enabled := lblMaxQueries.Enabled;
   lblMaxUpdates.Enabled := lblMaxQueries.Enabled;
@@ -779,16 +894,16 @@ begin
   lblMaxConnections.Enabled := lblMaxQueries.Enabled;
   editMaxConnections.Enabled := lblMaxQueries.Enabled;
   udMaxConnections.Enabled := lblMaxQueries.Enabled;
-  lblMaxUserConnections.Enabled := UserSelected and (FConnection.ServerVersionInt >= 50003);
+  lblMaxUserConnections.Enabled := UserSelected and User.IsUser and (FConnection.ServerVersionInt >= 50003);
   editMaxUserConnections.Enabled := lblMaxUserConnections.Enabled;
   udMaxUserConnections.Enabled := lblMaxUserConnections.Enabled;
 
-  tabSSL.Enabled := UserSelected;
-  comboSSL.Enabled := UserSelected;
+  tabSSL.Enabled := UserSelected and User.IsUser;
+  comboSSL.Enabled := UserSelected and User.IsUser;
 
   btnAddObject.Enabled := UserSelected;
   btnDeleteUser.Enabled := UserSelected;
-  btnCloneUser.Enabled := UserSelected and (not FAdded);
+  btnCloneUser.Enabled := UserSelected and (not FAdded) and User.IsUser;
 
   // Ensure the warning hint is displayed or cleared. This is not done when the dialog shows up.
   listUsers.OnHotChange(Sender, nil, Node);
@@ -802,10 +917,15 @@ var
 begin
   if Column <> 0 then
     Exit;
+  User := Sender.GetNodeData(Node);
   case Kind of
-    ikNormal, ikSelected: ImageIndex := 43;
+    ikNormal, ikSelected: begin
+      if User.IsUser then
+        ImageIndex := ICONINDEX_USER
+      else
+        ImageIndex := ICONINDEX_ROLE;
+    end;
     ikOverlay: begin
-      User := Sender.GetNodeData(Node);
       if User.Password = '' then
         ImageIndex := 161;
       if FModified and (Node = Sender.FocusedNode) then
@@ -1048,12 +1168,11 @@ begin
 end;
 
 
-procedure TUserManagerForm.btnAddUserClick(Sender: TObject);
+procedure TUserManagerForm.menuItemUserClick(Sender: TObject);
 var
   P: TPrivObj;
   User: TUser;
-  OldUser, NodeUser: PUser;
-  Node: PVirtualNode;
+  OldUser: PUser;
   NewHost, NewPassword, NewUsername: String;
 begin
   // Create new or clone existing user
@@ -1081,20 +1200,63 @@ begin
   FUsers.Add(User);
   FAdded := True;
   InvalidateVT(listUsers, VTREE_NOTLOADED, True);
-  // Select newly added item.
+  SelectUserNode(User);
+  Modified := True;
+  // Focus the user name entry box.
+  PageControlSettings.ActivePage := tabCredentials;
+  editUserName.SetFocus;
+end;
+
+
+procedure TUserManagerForm.menuItemRoleClick(Sender: TObject);
+var
+  RoleName, CreateRole: String;
+  User: TUser;
+begin
+  // Try to unfocus current user which triggers saving modifications.
+  listUsers.FocusedNode := nil;
+  if Assigned(listUsers.FocusedNode) then
+    Exit;
+
+  // Add role
+  RoleName := '';
+  if not InputQuery(_('Create role'), _('Role name'), RoleName) then
+    Exit;
+
+  try
+    CreateRole := FConnection.SqlProvider.GetSql(qCreateRole, [FConnection.EscapeString(RoleName)]);
+    FConnection.Query(CreateRole);
+    User := TUser.Create;
+    User.Username := RoleName;
+    User.IsRole := True;
+    FUsers.Add(User);
+    InvalidateVT(listUsers, VTREE_NOTLOADED, True);
+    SelectUserNode(User);
+    Modified := True;
+  except
+    on E:Exception do
+      ErrorDialog(E.Message);
+  end;
+end;
+
+
+function TUserManagerForm.SelectUserNode(User: TUser): Boolean;
+var
+  NodeUser: PUser;
+  Node: PVirtualNode;
+begin
+  // Select a user node in the listing
+  Result := False;
   Node := listUsers.GetFirst;
   while Assigned(Node) do begin
     NodeUser := listUsers.GetNodeData(Node);
     if User = NodeUser^ then begin
       SelectNode(listUsers, Node);
+      Result := True;
       break;
     end;
     Node := listUsers.GetNextSibling(Node);
   end;
-  Modified := True;
-  // Focus the user name entry box.
-  PageControlSettings.ActivePage := tabCredentials;
-  editUserName.SetFocus;
 end;
 
 
@@ -1163,8 +1325,9 @@ var
   FocusedUser: PUser;
   Tables, WithClauses: TStringList;
   P: TPrivObj;
-  i: Integer;
+  i, j: Integer;
   PasswordSet, WithGrant: Boolean;
+  RoleName, RoleAssigned: String;
 
   function GetObjectType(ObjType: String): String;
   begin
@@ -1181,7 +1344,7 @@ begin
   if FAdded then begin
     FocusedUser.Username := editUsername.Text;
     FocusedUser.Host := editFromHost.Text;
-    if IsEmpty(editPassword.Text) then
+    if IsEmpty(editPassword.Text) and FocusedUser.IsUser then
       FocusedUser.Problem := upEmptyPassword;
   end else begin
     if (FocusedUser.Problem=upNone)
@@ -1191,8 +1354,14 @@ begin
       FocusedUser.Problem := upEmptyPassword
   end;
 
-  OrgUserHost := FConnection.EscapeString(FocusedUser.Username)+'@'+FConnection.EscapeString(FocusedUser.Host);
-  UserHost := FConnection.EscapeString(editUsername.Text)+'@'+FConnection.EscapeString(editFromHost.Text);
+  if FocusedUser.IsUser then begin
+    OrgUserHost := FConnection.EscapeString(FocusedUser.Username)+'@'+FConnection.EscapeString(FocusedUser.Host);
+    UserHost := FConnection.EscapeString(editUsername.Text)+'@'+FConnection.EscapeString(editFromHost.Text);
+  end
+  else begin
+    OrgUserHost := FConnection.EscapeString(FocusedUser.Username);
+    UserHost := FConnection.EscapeString(editUsername.Text);
+  end;
 
   try
     // Ensure we have a unique user@host combination
@@ -1200,7 +1369,7 @@ begin
       if User = FocusedUser^ then
         Continue;
       if (User.Username = editUsername.Text) and (User.Host = editFromHost.Text) then
-        raise EInputError.CreateFmt('User <%s@%s> already exists.', [editUsername.Text, editFromHost.Text]);
+        raise EInputError.CreateFmt('User or role <%s@%s> already exists.', [editUsername.Text, editFromHost.Text]);
     end;
 
     // Check input: Ensure we have a unique user@host combination
@@ -1282,8 +1451,8 @@ begin
         FConnection.ShowWarnings;
       end;
 
-      // Global options
-      if P.DBObj.NodeType = lntNone then begin
+      // General user options
+      if (P.DBObj.NodeType = lntNone) and FocusedUser.IsUser then begin
         // SSL
         case comboSSL.ItemIndex of
           1: RequireClause := 'SSL';
@@ -1316,34 +1485,77 @@ begin
       FConnection.ShowWarnings;
     end;
 
-    // Rename user
-    if (FocusedUser.Username <> editUsername.Text) or (FocusedUser.Host <> editFromHost.Text) then begin
-      if FConnection.ServerVersionInt >= 50002 then
-        FConnection.Query('RENAME USER '+OrgUserHost+' TO '+UserHost)
-      else begin
-        Tables := Explode(',', 'user,db,tables_priv,columns_priv');
-        for Table in Tables do begin
-          FConnection.Query('UPDATE '+FConnection.QuoteIdent('mysql')+'.'+FConnection.QuoteIdent(Table)+
-            ' SET User='+FConnection.EscapeString(editUsername.Text)+', Host='+FConnection.EscapeString(editFromHost.Text)+
-            ' WHERE User='+FConnection.EscapeString(FocusedUser.Username)+' AND Host='+FConnection.EscapeString(FocusedUser.Host)
-            );
-        end;
-        FreeAndNil(Tables);
+    // Add or remove roles
+    for i:=0 to ValueListEditorRoles.Strings.Count-1 do begin
+      j := FocusedUser.Roles.IndexOf(ValueListEditorRoles.Strings[i]);
+      if j = -1 then begin
+        RoleName := ValueListEditorRoles.Strings.Names[i];
+        RoleAssigned := ValueListEditorRoles.Strings.ValueFromIndex[i];
+        if RoleAssigned = TUser.RoleNo then
+          FConnection.Query(qRevokeRole, [FConnection.EscapeString(RoleName), OrgUserHost])
+        else if RoleAssigned = TUser.RoleYes then
+          FConnection.Query(qGrantRole, [FConnection.EscapeString(RoleName), OrgUserHost, ''])
+        else if RoleAssigned = TUser.RoleYesAdmin then
+          FConnection.Query(qGrantRole, [FConnection.EscapeString(RoleName), OrgUserHost, ' WITH ADMIN OPTION']);
+        FConnection.ShowWarnings;
+      end;
+    end;
+
+    // Set default role
+    if comboDefaultRole.Enabled and (comboDefaultRole.ItemIndex > -1) then begin
+      if comboDefaultRole.ItemIndex = 0 then begin
+        FConnection.Query(qSetDefaultRole, ['NONE', OrgUserHost]);
+      end
+      else try
+        RoleName := comboDefaultRole.Text;
+        RoleAssigned := ValueListEditorRoles.Strings.Values[RoleName];
+        if (RoleAssigned = TUser.RoleYes) or (RoleAssigned = TUser.RoleYesAdmin) then
+          FConnection.Query(qSetDefaultRole, [FConnection.EscapeString(RoleName), OrgUserHost]);
+      except
+        on E:EDbError do; // Happens when this role was not granted before
       end;
       FConnection.ShowWarnings;
     end;
 
-    FConnection.Query('FLUSH PRIVILEGES');
+
+    // Rename user
+    if (FocusedUser.Username <> editUsername.Text) or (FocusedUser.Host <> editFromHost.Text) then begin
+
+      if FocusedUser.IsUser then begin
+        if FConnection.ServerVersionInt >= 50002 then
+          FConnection.Query('RENAME USER '+OrgUserHost+' TO '+UserHost)
+        else begin
+          Tables := Explode(',', 'user,db,tables_priv,columns_priv');
+          for Table in Tables do begin
+            FConnection.Query('UPDATE '+FConnection.QuoteIdent('mysql')+'.'+FConnection.QuoteIdent(Table)+
+              ' SET User='+FConnection.EscapeString(editUsername.Text)+', Host='+FConnection.EscapeString(editFromHost.Text)+
+              ' WHERE User='+FConnection.EscapeString(FocusedUser.Username)+' AND Host='+FConnection.EscapeString(FocusedUser.Host)
+              );
+          end;
+          FreeAndNil(Tables);
+        end;
+      end
+
+      else begin
+        // todo: Rename role
+      end;
+
+      FConnection.ShowWarnings;
+    end;
+
+    FConnection.Query(qReloadPrivileges);
     Modified := False;
     FAdded := False;
     FocusedUser.Username := editUsername.Text;
     FocusedUser.Host := editFromHost.Text;
     if editPassword.Modified then
       FocusedUser.Password := editPassword.Text;
+    FocusedUser.DefaultRole := IfThen(comboDefaultRole.ItemIndex=0, '', comboDefaultRole.Text);
     FocusedUser.SSL := comboSSL.ItemIndex;
     FocusedUser.Cipher := editCipher.Text;
     FocusedUser.Issuer := editIssuer.Text;
     FocusedUser.Subject := editSubject.Text;
+    FocusedUser.Roles.Assign(ValueListEditorRoles.Strings);
     listUsers.OnFocusChanged(listUsers, listUsers.FocusedNode, listUsers.FocusedColumn);
   except
     on E:EDbError do
@@ -1379,24 +1591,40 @@ begin
     FUsers.Remove(User^);
     listUsers.DeleteNode(listUsers.FocusedNode);
     FAdded := False;
-  end else if MessageDialog(f_('Delete user %s@%s?', [User.Username, User.Host]), mtConfirmation, [mbYes, mbCancel]) = mrYes then begin
-    UserHost := FConnection.EscapeString(User.Username)+'@'+FConnection.EscapeString(User.Host);
-    try
-      // Revoke privs explicitly, required on old servers.
-      // Newer servers only require one DROP USER query
-      if FConnection.ServerVersionInt < 50002 then begin
-        FConnection.Query('REVOKE ALL PRIVILEGES ON *.* FROM '+UserHost);
-        FConnection.Query('REVOKE GRANT OPTION ON *.* FROM '+UserHost);
+  end else begin
+    UserHost := IfThen(
+      User.IsUser,
+      FConnection.EscapeString(User.Username)+'@'+FConnection.EscapeString(User.Host),
+      FConnection.EscapeString(User.Username)
+      );
+    if MessageDialog(f_('Delete user or role %s?', [UserHost]), mtConfirmation, [mbYes, mbCancel]) = mrYes then begin
+      try
+        // Revoke privs explicitly, required on old servers.
+        // Newer servers only require one DROP USER query
+        if FConnection.ServerVersionInt < 50002 then begin
+          FConnection.Query('REVOKE ALL PRIVILEGES ON *.* FROM '+UserHost);
+          FConnection.Query('REVOKE GRANT OPTION ON *.* FROM '+UserHost);
+        end;
+
+        // Actual deletion
+        if User.IsUser then begin
+          FConnection.Query(qDropUser, [
+            FConnection.EscapeString(User.Username),
+            FConnection.EscapeString(User.Host)
+            ]);
+        end
+        else begin
+          FConnection.Query(qDropRole, [
+            FConnection.EscapeString(User.Username)
+            ]);
+        end;
+        FConnection.Query(qReloadPrivileges);
+
+        FUsers.Remove(User^);
+        listUsers.DeleteNode(listUsers.FocusedNode);
+      except on E:EDbError do
+        ErrorDialog(E.Message);
       end;
-      if FConnection.ServerVersionInt < 40101 then
-        FConnection.Query('DELETE FROM mysql.user WHERE User='+FConnection.EscapeString(User.Username)+' AND Host='+FConnection.EscapeString(User.Host))
-      else
-        FConnection.Query('DROP USER '+UserHost);
-      FConnection.Query('FLUSH PRIVILEGES');
-      FUsers.Remove(User^);
-      listUsers.DeleteNode(listUsers.FocusedNode);
-    except on E:EDbError do
-      ErrorDialog(E.Message);
     end;
   end;
 end;
@@ -1409,6 +1637,11 @@ begin
   listUsers.OnFocusChanged(listUsers, listUsers.FocusedNode, listUsers.FocusedColumn);
 end;
 
+
+procedure TUserManagerForm.menuAddPopup(Sender: TObject);
+begin
+  menuItemRole.Enabled := FHasIsRole;
+end;
 
 procedure TUserManagerForm.menuHostClick(Sender: TObject);
 begin
@@ -1518,6 +1751,7 @@ begin
   Username := '';
   Host := '';
   Password := '';
+  DefaultRole := '';
   Cipher := '';
   Issuer := '';
   Subject := '';
@@ -1527,12 +1761,23 @@ begin
   MaxUserConnections := 0;
   SSL := 0;
   Problem := upNone;
+  IsRole := False;
+  Roles := TStringList.Create;
+end;
+
+destructor TUser.Destroy;
+begin
+  Roles.Free;
+  inherited;
 end;
 
 function TUser.HostRequiresNameResolve: Boolean;
 var
   rx: TRegExpr;
 begin
+  Result := False;
+  if IsRole then
+    Exit;
   rx := TRegExpr.Create;
   // Valid ips or wildcards which do not need name resolving:
   rx.Expression := '^(localhost|[\d\.\/\:_]+|.*%.*|[\w\d_]{4}\:.*)$';
@@ -1596,6 +1841,64 @@ begin
 end;
 
 
+function TUser.IsUser: Boolean;
+begin
+  Result := not IsRole;
+end;
+
+
+function TUser.AssignedRolesCount: Integer;
+var
+  i: Integer;
+  Val: String;
+begin
+  Result := 0;
+  for i:=0 to Roles.Count-1 do begin
+    Val := Roles.ValueFromIndex[i];
+    if (Val = RoleYes) or (Val = RoleYesAdmin) then
+      Inc(Result);
+  end;
+end;
+
+
+{ TUserList }
+
+function TUserList.GetRoleNames: TStringList;
+var
+  u: TUser;
+begin
+  Result := TStringList.Create;
+  for u in Self do begin
+    if u.IsRole then
+      Result.Add(u.Username);
+  end;
+end;
+
+procedure TUserList.GetRoleNames(Strings: TStrings);
+var
+  RoleNames: TStringList;
+begin
+  RoleNames := GetRoleNames;
+  Strings.AddStrings(RoleNames);
+  RoleNames.Free;
+end;
+
+function TUserList.GetDefaultRoles(ExcludeRole: TUser): TStringList;
+var
+  RoleNames: TStringList;
+  i: Integer;
+begin
+  // Default role assignments with "no" value for all roles
+  Result := TStringList.Create;
+  RoleNames := GetRoleNames;
+  for i:=0 to RoleNames.Count-1 do begin
+    if ExcludeRole.IsRole and SameText(RoleNames[i], ExcludeRole.Username) then
+      Continue;
+    Result.AddPair(RoleNames[i], TUser.RoleNo);
+  end;
+  RoleNames.Free;
+end;
+
 
 { TPrivObj }
 
@@ -1637,5 +1940,11 @@ begin
   end;
 end;
 
+
+initialization
+
+TUser.RoleNo := _('No');
+TUser.RoleYes := _('Yes');
+TUser.RoleYesAdmin := _('Yes, with admin option');
 
 end.

@@ -77,12 +77,13 @@ type
     private
       FSQL: String;
       FQuotes: THashedStringList;
+      FEscape: Char;
       procedure SetSQL(Value: String);
       function GetSize: Integer;
       function GetSQLWithoutComments: String; overload;
     public
       constructor Create(NetTypeGroup: TNetTypeGroup);
-      destructor Destroy; overload;
+      destructor Destroy; override;
       class function GetSQLWithoutComments(FullSQL: String): String; overload;
       property Size: Integer read GetSize;
       property SQL: String read FSQL write SetSQL;
@@ -724,10 +725,13 @@ end;
 }
 procedure StreamWrite(S: TStream; Text: String = '');
 var
-  utf8: AnsiString;
+  utf8: UTF8String;
+  L: Integer;
 begin
   utf8 := Utf8Encode(Text);
-  S.Write(utf8[1], Length(utf8));
+  L := Length(utf8);
+  if L > 0 then
+    S.WriteBuffer(utf8[1], L);
 end;
 
 
@@ -3474,9 +3478,11 @@ begin
   FQuotes.Sorted := True;
   FQuotes.Add('"');
   FQuotes.Add('''');
+  FEscape := '\';
   case NetTypeGroup of
     ngMySQL: FQuotes.Add('`'); // MySQL/MariaDB only
     ngPgSQL: FQuotes.Add('$$'); // PostgreSQL only ($abc$ unsupported)
+    ngSQLite: FEscape := '''';
   end;
 end;
 
@@ -3567,7 +3573,7 @@ begin
       end;
     end;
     if not InEscape then
-      InEscape := c = '\'
+      InEscape := c = FEscape
     else
       InEscape := False;
 
@@ -3914,7 +3920,6 @@ constructor TAppSettings.Create;
 var
   rx: TRegExpr;
   i: Integer;
-  DefaultSnippetsDirectory: String;
   PortableLockFile: String;
   NewFileHandle: THandle;
 begin
@@ -4192,14 +4197,7 @@ begin
   InitSetting(asDisplayReverseForeignKeys,        'DisplayReverseForeignKeys',             0, False);
   InitSetting(asGenerateDataNumRows,              'GenerateDataNumRows',                   1000);
   InitSetting(asGenerateDataNullAmount,           'GenerateDataNullAmount',                10);
-
-  // Default folder for snippets
-  if FPortableMode then
-    DefaultSnippetsDirectory := GetAppDir
-  else
-    DefaultSnippetsDirectory := DirnameUserDocuments;
-  DefaultSnippetsDirectory := DefaultSnippetsDirectory + 'Snippets\';
-  InitSetting(asCustomSnippetsDirectory,          'CustomSnippetsDirectory',               0, False, DefaultSnippetsDirectory);
+  InitSetting(asCustomSnippetsDirectory,          'CustomSnippetsDirectory',               0, False, DirnameUserDocuments + 'Snippets\');
   InitSetting(asPromptSaveFileOnTabClose,         'PromptSaveFileOnTabClose',              0, True);
   // Restore tabs feature crashes often on old XP systems, see https://www.heidisql.com/forum.php?t=34044
   InitSetting(asRestoreTabs,                      'RestoreTabs',                           0, Win32MajorVersion >= 6);
@@ -4872,19 +4870,29 @@ end;
 
 function TAppSettings.DirnameUserAppData: String;
 begin
-  // User folder for HeidiSQL's data (<user name>\Application Data)
-  Result := GetShellFolder(FOLDERID_RoamingAppData) + '\' + APPNAME + '\';
-  if not DirectoryExists(Result) then begin
-    ForceDirectories(Result);
+  // C:\Users\mike\AppData\Roaming\HeidiSQL\
+  if PortableMode then begin
+    Result := GetAppDir;
+  end
+  else begin
+    Result := GetShellFolder(FOLDERID_RoamingAppData) + '\' + APPNAME + '\';
+    if not DirectoryExists(Result) then begin
+      ForceDirectories(Result);
+    end;
   end;
 end;
 
 
 function TAppSettings.DirnameUserDocuments: String;
 begin
-  // "HeidiSQL" folder under user's documents folder, e.g. c:\Users\Mike\Documents\HeidiSQL\
-  Result := GetShellFolder(FOLDERID_Documents) + '\' + APPNAME + '\';
-  // Do not auto-create it, as we only use it for snippets which can also have a custom path.
+  // C:\Users\mike\Documents\HeidiSQL\
+  if PortableMode then begin
+    Result := GetAppDir;
+  end
+  else begin
+    Result := GetShellFolder(FOLDERID_Documents) + '\' + APPNAME + '\';
+    // Do not auto-create it, as we only use it for snippets which can also have a custom path.
+  end;
 end;
 
 
@@ -4904,11 +4912,7 @@ end;
 function TAppSettings.DirnameBackups: String;
 begin
   // Create backup folder if it does not exist and return it
-  if PortableMode then begin
-    Result := GetAppDir + 'Backups\'
-  end else begin
-    Result := DirnameUserAppData + 'Backups\';
-  end;
+  Result := DirnameUserAppData + 'Backups\';
   if not DirectoryExists(Result) then begin
     ForceDirectories(Result);
   end;
@@ -4917,11 +4921,7 @@ end;
 
 function TAppSettings.DirnameHighlighters: string;
 begin
-  if PortableMode then begin
-    Result := GetAppDir + 'Highlighters\'
-  end else begin
-    Result := DirnameUserAppData + 'Highlighters\';
-  end;
+  Result := DirnameUserAppData + 'Highlighters\';
   if not DirectoryExists(Result) then begin
     ForceDirectories(Result);
   end;

@@ -3241,7 +3241,7 @@ function TMySqlProvider.GetSql(AId: TQueryId): string;
 begin
   case AId of
     qDatabaseDrop: Result := 'DROP DATABASE %s';
-    qEmptyTable: Result := 'TRUNCATE ';
+    qEmptyTable: Result := 'TRUNCATE %s';
     qRenameTable: Result := 'RENAME TABLE %s TO %s';
     qRenameView: Result := 'RENAME TABLE %s TO %s';
     qCurrentUserHost: Result := 'SELECT CURRENT_USER()';
@@ -3320,7 +3320,7 @@ begin
         ', ID AS `Id`'+
         ', IS_DEFAULT AS `Default`'+
         ', 0 AS `Sortlen`'+
-        ' FROM information_schema.COLLATION_CHARACTER_SET_APPLICABILITY'+
+        ' FROM INFORMATION_SCHEMA.COLLATION_CHARACTER_SET_APPLICABILITY'+
         ' ORDER BY `Collation`',
       ''
       );
@@ -3340,6 +3340,80 @@ begin
       ' WHERE'+
       '   REFERENCED_TABLE_SCHEMA = :EscapedDatabase AND'+
       '   REFERENCED_TABLE_NAME = :EscapedName';
+    qExplain: Result := IfThen(
+      (FServerVersion >= 80400) and (FServerVersion < 100000), // Not MariaDB
+      'EXPLAIN FORMAT=TRADITIONAL %s',
+      'EXPLAIN %s'
+      );
+    qSetTimezone: Result := IfThen(
+      FServerVersion >= 40103,
+      'SET time_zone=%s',
+      ''
+      );
+    qShowFunctionStatus: Result := IfThen(
+      (FServerVersion >= 50000) and (FNetType <> ntMySQL_ProxySQLAdmin),
+      'SHOW FUNCTION STATUS WHERE Db = %s',
+      ''
+      );
+    qShowProcedureStatus: Result := IfThen(
+      (FServerVersion >= 50000) and (FNetType <> ntMySQL_ProxySQLAdmin),
+      'SHOW PROCEDURE STATUS WHERE Db = %s',
+      ''
+      );
+    qShowTriggers: Result := IfThen(
+      (FServerVersion >= 50010) and (FNetType <> ntMySQL_ProxySQLAdmin),
+      'SHOW TRIGGERS FROM %s',
+      ''
+      );
+    qShowEvents: Result := IfThen(
+      (FServerVersion >= 50010) and (FNetType <> ntMySQL_ProxySQLAdmin),
+      'SELECT *, EVENT_SCHEMA AS `Db`, EVENT_NAME AS `Name` FROM INFORMATION_SCHEMA.`EVENTS` WHERE EVENT_SCHEMA=%s',
+      ''
+      );
+    qHelpKeyword: Result := IfThen(
+      (FServerVersion >= 40100) and (FNetType <> ntMySQL_ProxySQLAdmin),
+      'HELP %s',
+      ''
+      );
+    qShowCreateTrigger: Result := IfThen(
+      FServerVersion >= 50121,
+      'SHOW CREATE TRIGGER :QuotedDatabase.:QuotedName',
+      ''
+      );
+    qShowWarnings: Result := IfThen(
+      FServerVersion >= 40100,
+      'SHOW WARNINGS',
+      ''
+      );
+    qDropUser: Result := IfThen(
+      FServerVersion < 40101,
+      'DELETE FROM mysql.user WHERE User=%s AND Host=%s',
+      'DROP USER %s@%s'
+      );
+    qCreateRole: Result := 'CREATE ROLE %s';
+    qDropRole: Result := 'DROP ROLE %s';
+    qReloadPrivileges: Result := 'FLUSH PRIVILEGES';
+    qGrantRole: Result := 'GRANT %s TO %s%s';
+    qRevokeRole: Result := 'REVOKE %s FROM %s';
+    qSetDefaultRole: Result := 'SET DEFAULT ROLE %s FOR %s';
+    qIndexVisible: Result := IfThen(
+      FServerVersion >= 100600, // mariadb
+      'NOT IGNORED',
+      IfThen(
+        FServerVersion >= 80000, // mysql
+        'VISIBLE',
+        ''
+        )
+      );
+    qIndexInvisible: Result := IfThen(
+      FServerVersion >= 100600, // mariadb
+      'IGNORED',
+      IfThen(
+        FServerVersion >= 80000, // mysql
+        'INVISIBLE',
+        ''
+        )
+      );
     else Result := inherited;
   end;
 end;

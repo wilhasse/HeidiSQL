@@ -1010,8 +1010,7 @@ type
     procedure actCloseQueryTabExecute(Sender: TObject);
     procedure menuCloseQueryTabClick(Sender: TObject);
     procedure CloseQueryTab(PageIndex: Integer);
-    procedure CloseButtonOnMouseDown(Sender: TObject; Button: TMouseButton; Shift: TShiftState; X, Y: Integer);
-    procedure CloseButtonOnMouseUp(Sender: TObject; Button: TMouseButton; Shift: TShiftState; X, Y: Integer);
+    procedure CloseButtonOnClick(Sender: TObject);
     function GetMainTabAt(X, Y: Integer): Integer;
     procedure FixQueryTabCloseButtons;
     function GetOrCreateEmptyQueryTab(DoFocus: Boolean): TQueryTab;
@@ -2409,10 +2408,7 @@ var
 begin
   // Try to open tabs.ini for writing or reading
   // Taking multiple application instances into account
-  if AppSettings.PortableMode then
-    TabsIniFilename := GetAppDir + 'tabs.ini'
-  else
-    TabsIniFilename := AppSettings.DirnameUserAppData + 'tabs.ini';
+  TabsIniFilename := AppSettings.DirnameUserAppData + 'tabs.ini';
   WaitingSince := GetTickCount64;
   Attempts := 0;
   while not FileIsWritable(TabsIniFilename) do begin
@@ -3463,6 +3459,7 @@ end;
 procedure TMainForm.actExecuteQueryExecute(Sender: TObject);
 var
   ProfileNode: PVirtualNode;
+  Conn: TDBConnection;
   Batch: TSQLBatch;
   Tab: TQueryTab;
   PendingGrid: TVirtualStringTree;
@@ -3474,6 +3471,7 @@ var
   SqlMonitorContext: TSqlMonitorExecutionContext;
 begin
   Tab := QueryTabs.ActiveTab;
+  Conn := ActiveConnection;
   if QueryTabHasPendingGridChanges(Tab, PendingGrid) then begin
     if not EnsureGridChangesPosted(PendingGrid, SqlMonitorTranslate('executing a new SQL query')) then begin
       ValidateQueryControls(Sender);
@@ -3486,7 +3484,7 @@ begin
   SqlMonitorContext := nil;
 
   ShowStatusMsg(_('Splitting SQL queries ...'));
-  Batch := TSQLBatch.Create(ActiveConnection.Parameters.NetTypeGroup);
+  Batch := TSQLBatch.Create(Conn.Parameters.NetTypeGroup);
   if Sender = actExecuteSelection then begin
     Batch.SQL := Tab.Memo.SelText;
     Tab.LeftOffsetInMemo := Tab.Memo.SelStart;
@@ -3498,7 +3496,7 @@ begin
       ErrorDialog(_('Current query is empty'), _('Please move the cursor inside the query you want to use.'));
       DoExecute := False;
     end else begin
-      Batch.SQL := 'EXPLAIN ' + CurrentQuery;
+      Batch.SQL := Conn.SqlProvider.GetSql(qExplain, [CurrentQuery]);
     end;
   end else begin
     Batch.SQL := Tab.Memo.Text;
@@ -3524,7 +3522,7 @@ begin
   end;
 
   HasGuardedWrites := DoExecute and BatchHasGuardedWrites(Batch);
-  UseSqlMonitorForWrites := HasGuardedWrites and SqlMonitorShouldHandle(ActiveConnection);
+  UseSqlMonitorForWrites := HasGuardedWrites and SqlMonitorShouldHandle(Conn);
 
   if AppSettings.ReadBool(asWarnUnsafeUpdates) and DoExecute and (not UseSqlMonitorForWrites) then begin
     ShowStatusMsg(_('Checking queries for unsafe UPDATEs/DELETEs ...'));
@@ -3548,7 +3546,7 @@ begin
   end;
 
   if DoExecute then
-    DoExecute := PrepareSqlMonitorExecution(ActiveConnection, Batch, SqlMonitorContext);
+    DoExecute := PrepareSqlMonitorExecution(Conn, Batch, SqlMonitorContext);
 
   if DoExecute then begin
     try
@@ -3560,7 +3558,7 @@ begin
       ProfileNode := FindNode(Tab.treeHelpers, TQueryTab.HelperNodeProfile, nil);
       Tab.DoProfile := Assigned(ProfileNode) and (Tab.treeHelpers.CheckState[ProfileNode] in CheckedStates);
       if Tab.DoProfile then try
-        ActiveConnection.Query('SET profiling=1');
+        Conn.Query('SET profiling=1');
       except
         on E:EDbError do begin
           ErrorDialog(f_('Query profiling requires %s or later, and the server must not be configured with %s.', ['MySQL 5.0.37', '--disable-profiling']), E.Message);
@@ -3570,9 +3568,9 @@ begin
 
       // Start the execution thread
       Screen.Cursor := crAppStart;
-      ActiveConnection.Ping(True); // Prevents SynEdit paint exceptions if connection was killed outside
+      Conn.Ping(True); // Prevents SynEdit paint exceptions if connection was killed outside
       Tab.QueryRunning := True;
-      Tab.ExecutionThread := TQueryThread.Create(ActiveConnection, Batch, Tab.Number, SqlMonitorContext);
+      Tab.ExecutionThread := TQueryThread.Create(Conn, Batch, Tab.Number, SqlMonitorContext);
       Batch := nil;
       SqlMonitorContext := nil;
     except
@@ -4121,7 +4119,7 @@ begin
           db := DBObject.Database;
           Node := FindDBNode(DBtree, Conn, db);
           SetActiveDatabase('', Conn);
-          Conn.Query(Conn.SqlProvider.GetSql(qDatabaseDrop, [Conn.QuoteIdent(db)]));
+          Conn.Query(qDatabaseDrop, [Conn.QuoteIdent(db)]);
           DBtree.DeleteNode(Node);
           Conn.ClearDbObjects(db);
           Conn.RefreshAllDatabases;
@@ -4161,7 +4159,7 @@ begin
     try
       // Disable foreign key checks to avoid SQL errors
       if Conn.SqlProvider.Has(qDisableForeignKeyChecks) then
-        Conn.Query(Conn.SqlProvider.GetSql(qDisableForeignKeyChecks));
+        Conn.Query(qDisableForeignKeyChecks);
       // Compose and run DROP [TABLE|VIEW|...] queries
       Editor := ActiveObjectEditor;
       for DBObject in ObjectList do begin
@@ -4170,7 +4168,7 @@ begin
           Editor.Modified := False;
       end;
       if Conn.SqlProvider.Has(qEnableForeignKeyChecks) then
-        Conn.Query(Conn.SqlProvider.GetSql(qEnableForeignKeyChecks));
+        Conn.Query(qEnableForeignKeyChecks);
       // Refresh ListTables + dbtree so the dropped tables are gone:
       Conn.ClearDbObjects(ActiveDatabase);
       RefreshTree;
@@ -4912,7 +4910,7 @@ begin
           Conn.Query(QueryDisableChecks);
         try
           for TableOrView in Objects do begin
-            Conn.Query(Conn.SqlProvider.GetSql(qEmptyTable) + TableOrView.QuotedName);
+            Conn.Query(qEmptyTable, [TableOrView.QuotedName]);
             ProgressStep;
           end;
           actRefresh.Execute;
@@ -5269,7 +5267,7 @@ end;
 }
 procedure TMainform.CallSQLHelpWithKeyword( keyword: String );
 begin
-  if FActiveDbObj.Connection.Has(frHelpKeyword) then begin
+  if FActiveDbObj.Connection.SqlProvider.Has(qHelpKeyword) then begin
     if not Assigned(SqlHelpDialog) then
       SqlHelpDialog := TfrmSQLhelp.Create(Self);
     SqlHelpDialog.Show;
@@ -6336,6 +6334,8 @@ begin
   DBObj.Connection.Ping(True);
 
   if SelectedTableColumns.Count = 0 then begin
+    vt.Header.Columns.Clear;
+    vt.Clear;
     EnableDataTab(False);
   end else begin
     EnableDataTab(True);
@@ -7099,7 +7099,7 @@ begin
       if pid = Conn.ThreadId then
         LogSQL(f_('Ignoring own process id #%d when trying to kill it.', [pid]))
       else try
-        Conn.Query(Conn.SqlProvider.GetSql(qKillQuery, [pid]));
+        Conn.Query(qKillQuery, [pid]);
       except
         on E:EDbError do begin
           if Conn.LastErrorCode <> ER_NO_SUCH_THREAD then
@@ -8400,7 +8400,7 @@ begin
     actQueryTable.Enabled := Obj.NodeType in [lntTable, lntView];
     actRunRoutines.Enabled := Obj.NodeType in [lntProcedure, lntFunction];
     menuClearDataTabFilter.Enabled := Obj.NodeType in [lntTable, lntView];
-    menuEditObject.Enabled := IsDb or IsObject;
+    menuEditObject.Enabled := (IsDb and Obj.Connection.Parameters.IsAnyMySQL) or IsObject;
     // Enable certain items which are valid only here
     menuTreeExpandAll.Enabled := True;
     menuTreeCollapseAll.Enabled := True;
@@ -8697,7 +8697,7 @@ begin
   ShowStatusMsg(_('Fetching distinct values ...'));
   DbObj := ActiveDbObj;
   Conn := DbObj.Connection;
-  MaxSize := SIZE_GB;
+  MaxSize := SIZE_GB*2;
   ColumnHasIndex := DataGridResult.ColIsKeyPart(ResultCol)
     or DataGridResult.ColIsUniqueKeyPart(ResultCol)
     or DataGridResult.ColIsPrimaryKeyPart(ResultCol);
@@ -8711,7 +8711,7 @@ begin
     if SynMemoFilter.Text <> '' then
       Query := Query + ' WHERE ' + SynMemoFilter.Text + CRLF;
     Query := Query + ' GROUP BY '+Conn.QuoteIdent(ColName)+' ORDER BY c DESC, '+Conn.QuoteIdent(ColName);
-    Data := Conn.GetResults(Conn.ApplyLimitClause('SELECT', Query, 30, 0));
+    Data := Conn.GetResults(Conn.ApplyLimitClause('SELECT', Query, 50, 0));
     for i:=0 to Data.RecordCount-1 do begin
       if QFvalues.Count > i then
         Item := QFvalues[i]
@@ -9162,21 +9162,53 @@ end;
 procedure TMainForm.menuClearQueryHistoryClick(Sender: TObject);
 var
   Values: TStringList;
-  PathToDelete: String;
+  HistoryRootKey, ValueNameToDelete: String;
+  Tab: TQueryTab;
+  ClickNode: PVirtualNode;
+  History: TQueryHistory;
+  DialogResult: TModalResult;
 begin
   // Clear query history items in registry
-  // Take care of MessageDialog, probably changing the current SessionPath
-  PathToDelete := ActiveConnection.Parameters.SessionPath + '\' + REGKEY_QUERYHISTORY;
-  AppSettings.SessionPath := PathToDelete;
-  Values := AppSettings.GetValueNames;
-  if MessageDialog(_('Clear query history?'), f_('%s history items will be deleted.', [FormatNumber(Values.Count)]), mtConfirmation, [mbYes, mbNo]) = mrYes then begin
-    Screen.Cursor := crHourglass;
-    AppSettings.SessionPath := PathToDelete;
-    AppSettings.DeleteCurrentKey;
-    RefreshHelperNode(TQueryTab.HelperNodeHistory);
-    Screen.Cursor := crDefault;
+  HistoryRootKey := ActiveConnection.Parameters.SessionPath + '\' + REGKEY_QUERYHISTORY;
+  AppSettings.SessionPath := HistoryRootKey;
+
+  Tab := QueryTabs.ActiveTab;
+  ClickNode := Tab.treeHelpers.FocusedNode;
+
+  case Tab.treeHelpers.GetNodeLevel(ClickNode) of
+    1: begin
+      Values := AppSettings.GetValueNames;
+      //showmessage(Values.Text);
+      DialogResult := MessageDialog(
+        _('Clear query history?'),
+        f_('%s history items will be deleted.', [FormatNumber(Values.Count)]),
+        mtConfirmation,
+        [mbYes, mbNo]
+        );
+      if DialogResult = mrYes then begin
+        Screen.Cursor := crHourglass;
+        // MessageDialog may have changed the current SessionPath
+        AppSettings.SessionPath := HistoryRootKey;
+        AppSettings.DeleteCurrentKey;
+        RefreshHelperNode(TQueryTab.HelperNodeHistory);
+        Screen.Cursor := crDefault;
+      end;
+      Values.Free;
+    end;
+
+    2: begin
+      History := Tab.HistoryDays.Objects[ClickNode.Parent.Index] as TQueryHistory;
+      ValueNameToDelete := History[ClickNode.Index].RegValue.ToString;
+      //showmessage(ValueNameToDelete);
+      Screen.Cursor := crHourglass;
+      // MessageDialog may have changed the current SessionPath
+      AppSettings.SessionPath := HistoryRootKey;
+      AppSettings.DeleteValue(ValueNameToDelete);
+      RefreshHelperNode(TQueryTab.HelperNodeHistory);
+      Screen.Cursor := crDefault;
+    end;
   end;
-  Values.Free;
+
   AppSettings.ResetPath;
 end;
 
@@ -9981,65 +10013,72 @@ var
   Bytes: Int64;
   AllListsCached: Boolean;
 begin
-  DBObj := Sender.GetNodeData(Node);
-  case Column of
-    0: case DBObj.NodeType of
-        lntNone: CellText := DBObj.Connection.Parameters.SessionPath;
-        lntDb: CellText := DBObj.Database;
-        lntGroup: begin
-          CellText := DBObj.Name;
-          if Sender.ChildrenInitialized[Node] then
-            CellText := CellText + ' (' + FormatNumber(Sender.ChildCount[Node]) + ')';
-        end;
-        lntTable..lntEvent: try
-          if (DBObj.Schema <> '') and (DBObj.Connection.Parameters.NetTypeGroup = ngMSSQL) then
-            CellText := DBObj.Schema + '.' + DBObj.Name
-          else
+  try
+    DBObj := Sender.GetNodeData(Node);
+    case Column of
+      0: case DBObj.NodeType of
+          lntNone: CellText := DBObj.Connection.Parameters.SessionPath;
+          lntDb: CellText := DBObj.Database;
+          lntGroup: begin
             CellText := DBObj.Name;
-        except
-          CellText := DBObj.Name;
-        end;
-        lntColumn: CellText := DBObj.Column;
-      end;
-    1: if DBObj.Connection.Active then case DBObj.NodeType of
-        // Calculate and display the sum of all table sizes in ALL dbs if all table lists are cached
-        lntNone: begin
-            AllListsCached := true;
-            for i:=0 to DBObj.Connection.AllDatabases.Count-1 do begin
-              if not DBObj.Connection.DbObjectsCached(DBObj.Connection.AllDatabases[i]) then begin
-                AllListsCached := false;
-                break;
-              end;
-            end;
-            // Will be also set to a negative value by GetTableSize and results of SHOW TABLES
-            Bytes := -1;
-            if AllListsCached then begin
-              Bytes := 0;
-              for i:=0 to DBObj.Connection.AllDatabases.Count-1 do begin
-                DBObjects := DBObj.Connection.GetDBObjects(DBObj.Connection.AllDatabases[i]);
-                Inc(Bytes, DBObjects.DataSize);
-              end;
-            end;
-            if Bytes >= 0 then CellText := FormatByteNumber(Bytes)
-            else CellText := '';
+            if Sender.ChildrenInitialized[Node] then
+              CellText := CellText + ' (' + FormatNumber(Sender.ChildCount[Node]) + ')';
           end;
-        // Calculate and display the sum of all table sizes in ONE db, if the list is already cached.
-        lntDb: begin
-            if not DBObj.Connection.DbObjectsCached(DBObj.Database) then
-              CellText := ''
-            else begin
-              DBObjects := DBObj.Connection.GetDBObjects(DBObj.Database);
-              CellText := FormatByteNumber(DBObjects.DataSize);
-            end;
-          end;
-        lntTable: begin
-            if DBObj.Size >= 0 then
-              CellText := FormatByteNumber(DBObj.Size)
+          lntTable..lntEvent: try
+            if (DBObj.Schema <> '') and (DBObj.Connection.Parameters.NetTypeGroup = ngMSSQL) then
+              CellText := DBObj.Schema + '.' + DBObj.Name
             else
-              CellText := '';
-          end
-        else CellText := ''; // Applies for views/procs/... which have no size
-      end;
+              CellText := DBObj.Name;
+          except
+            CellText := DBObj.Name;
+          end;
+          lntColumn: CellText := DBObj.Column;
+        end;
+      1: if DBObj.Connection.Active then case DBObj.NodeType of
+          // Calculate and display the sum of all table sizes in ALL dbs if all table lists are cached
+          lntNone: begin
+              AllListsCached := true;
+              for i:=0 to DBObj.Connection.AllDatabases.Count-1 do begin
+                if not DBObj.Connection.DbObjectsCached(DBObj.Connection.AllDatabases[i]) then begin
+                  AllListsCached := false;
+                  break;
+                end;
+              end;
+              // Will be also set to a negative value by GetTableSize and results of SHOW TABLES
+              Bytes := -1;
+              if AllListsCached then begin
+                Bytes := 0;
+                for i:=0 to DBObj.Connection.AllDatabases.Count-1 do begin
+                  DBObjects := DBObj.Connection.GetDBObjects(DBObj.Connection.AllDatabases[i]);
+                  Inc(Bytes, DBObjects.DataSize);
+                end;
+              end;
+              if Bytes >= 0 then CellText := FormatByteNumber(Bytes)
+              else CellText := '';
+            end;
+          // Calculate and display the sum of all table sizes in ONE db, if the list is already cached.
+          lntDb: begin
+              if not DBObj.Connection.DbObjectsCached(DBObj.Database) then
+                CellText := ''
+              else begin
+                DBObjects := DBObj.Connection.GetDBObjects(DBObj.Database);
+                CellText := FormatByteNumber(DBObjects.DataSize);
+              end;
+            end;
+          lntTable: begin
+              if DBObj.Size >= 0 then
+                CellText := FormatByteNumber(DBObj.Size)
+              else
+                CellText := '';
+            end
+          else CellText := ''; // Applies for views/procs/... which have no size
+        end;
+    end;
+  except
+    // Uploaded crash reports show multiple different situations with an AV,
+    // some of them in conjunction with a killed query.
+    on E:EAccessViolation do
+      CellText := '';
   end;
 end;
 
@@ -10676,9 +10715,9 @@ begin
       if not Assigned(DBtree.FocusedNode) then
         SetActiveDatabase('', FocusNewObject.Connection);
     except
+      on E:Exception do
+        LogSQL('RefreshTree: '+E.Message, lcInfo);
     end;
-    if not Assigned(DBtree.FocusedNode) then
-      raise Exception.Create(_('Could not find node to focus.'));
 
   finally
     FTreeRefreshInProgress := False;
@@ -10951,8 +10990,10 @@ begin
 
   RowNumber := Sender.GetNodeData(Node);
   Results.RecNo := RowNumber^;
-  if Results.IsNull(ResultCol) and (not EditingAndFocused) then
-    CellText := TEXT_NULL
+  if Results.IsNull(ResultCol) then begin
+    // Grid editors come here through Tree.GetTextInfo(), provide empty string then
+    CellText := IfThen(EditingAndFocused, '', TEXT_NULL);
+  end
   else begin
     case Results.DataType(ResultCol).Category of
       dtcInteger, dtcReal: begin
@@ -11346,6 +11387,8 @@ end;
 
 procedure TMainForm.AnyGridEditing(Sender: TBaseVirtualTree; Node:
     PVirtualNode; Column: TColumnIndex; var Allowed: Boolean);
+var
+  ColInfo: TTableColumn;
 begin
   Allowed := False;
   try
@@ -11353,6 +11396,15 @@ begin
       ErrorDialog(_('Could not load full row data.'))
     else begin
       Allowed := True;
+      if Sender = DataGrid then begin
+        ColInfo := SelectedTableColumns.FindByName(Sender.Header.Columns[Column].Text);
+        if Assigned(ColInfo) then begin
+          Allowed := ColInfo.GenerationExpression.IsEmpty;
+          if not Allowed then
+            ErrorDialog(f_('Column %s is defined as generated per "%s". You cannot edit its content.', [Column.ToString, ColInfo.GenerationExpression]));
+        end;
+      end;
+
       // Move Esc shortcut from "Cancel row editing" to "Cancel cell editing"
       actDataCancelChanges.ShortCut := 0;
       actDataPostChanges.ShortCut := 0;
@@ -12524,17 +12576,10 @@ begin
     end else if CurrentControl is TSynMemo then begin
       SynMemo := CurrentControl as TSynMemo;
       if SynMemo.SelAvail then begin
-        // Create both text and RTF clipboard format, so rich text applications can paste highlighted SQL
-        Clipboard.Open;
-        Clipboard.TryAsText := SynMemo.SelText;
-        Exporter := TSynExporterRTF.Create(Self);
-        Exporter.Highlighter := SynMemo.Highlighter;
-        Exporter.ExportAll(Explode(CRLF, SynMemo.SelText));
-        if DoCut then SynMemo.CutToClipboard
-        else SynMemo.CopyToClipboard;
-        Exporter.CopyToClipboard;
-        Clipboard.Close;
-        Exporter.Free;
+        if DoCut then
+          SynMemo.CutToClipboard
+        else
+          SynMemo.CopyToClipboard;
       end;
     end else begin
       raise Exception.Create('Unhandled control in clipboard action: '+IfThen(Assigned(CurrentControl), CurrentControl.Name, 'nil'));
@@ -12866,8 +12911,7 @@ begin
   QueryTab.CloseButton.Height := 16;
   QueryTab.CloseButton.Flat := True;
   VirtualImageListMain.GetBitmap(134, QueryTab.CloseButton.Glyph);
-  QueryTab.CloseButton.OnMouseDown := CloseButtonOnMouseDown;
-  QueryTab.CloseButton.OnMouseUp := CloseButtonOnMouseUp;
+  QueryTab.CloseButton.OnClick := CloseButtonOnClick;
   SetTabCaption(QueryTab.TabSheet.PageIndex, '');
 
   // Dumb code which replicates all controls from tabQuery
@@ -13412,22 +13456,9 @@ begin
 end;
 
 
-procedure TMainForm.CloseButtonOnMouseDown(Sender: TObject; Button: TMouseButton; Shift: TShiftState; X, Y: Integer);
+procedure TMainForm.CloseButtonOnClick(Sender: TObject);
 begin
   FLastMouseDownCloseButton := Sender;
-end;
-
-
-procedure TMainForm.CloseButtonOnMouseUp(Sender: TObject; Button: TMouseButton; Shift: TShiftState; X, Y: Integer);
-begin
-  // Click on "Close" button of Query tab
-  if Button <> mbLeft then
-    Exit;
-  // Between MousDown and MouseUp it is possible that the focused tab has switched. As we simulate a mouse-click
-  // here, we must check if also the MouseDown event was fired on this particular button. See issue #1469.
-  if (Sender <> FLastMouseDownCloseButton) then
-    Exit;
-  // Prevent EAccessViolation in TControl.GetClientWidth, see issue #1640
   TimerCloseTabByButton.Enabled := True;
 end;
 
@@ -14339,15 +14370,17 @@ procedure TMainForm.lblExplainProcessClick(Sender: TObject);
 var
   Tab: TQueryTab;
   UsedDatabase: String;
+  Conn: TDBConnection;
 begin
   // Click on "Explain" link label, in process viewer
+  Conn := ActiveConnection;
   actNewQueryTabExecute(Sender);
   Tab := QueryTabs[QueryTabs.Count-1];
   UsedDatabase := listProcesses.Text[listProcesses.FocusedNode, 3];
   if not UsedDatabase.IsEmpty then begin
-    Tab.Memo.Lines.Add('USE ' + ActiveConnection.QuoteIdent(UsedDatabase) + ';');
+    Tab.Memo.Lines.Add(Conn.SqlProvider.GetSql(qUSEQuery, [Conn.QuoteIdent(UsedDatabase)]) + ';');
   end;
-  Tab.Memo.Lines.Add('EXPLAIN' + sLineBreak + SynMemoProcessView.Text + ';');
+  Tab.Memo.Lines.Add(Conn.SqlProvider.GetSql(qExplain, [SynMemoProcessView.Text]) + ';');
   Tab.TabSheet.Show;
   actExecuteQueryExecute(Sender);
 end;
@@ -14424,6 +14457,7 @@ begin
       Tab.ExecutionThread.Aborted := True;
       Killer := ActiveConnection.Parameters.CreateConnection(Self);
       Killer.Parameters := ActiveConnection.Parameters;
+      Killer.OwnsParameters := False;
       Killer.LogPrefix := _('Helper connection');
       Killer.OnLog := LogSQL;
       try
@@ -15059,6 +15093,7 @@ begin
   menuExplore.Enabled := False;
   menuHelp.Enabled := False;
   menuClearQueryHistory.Enabled := False;
+  menuClearQueryHistory.Caption := _('Clear query history ...');
 
   case Tree.GetNodeLevel(Tree.FocusedNode) of
     0: ;
@@ -15095,6 +15130,7 @@ begin
     2: case Tree.FocusedNode.Parent.Parent.Index of
       TQueryTab.HelperNodeHistory: begin
         menuClearQueryHistory.Enabled := True;
+        menuClearQueryHistory.Caption := _('Delete this query from history');
         menuInsertAtCursor.Enabled := True;
       end;
     end;

@@ -1518,7 +1518,7 @@ begin
         Item.Caption := DB;
         Item.OnClick := MenuDatabasesClick;
         Item.AutoCheck := True;
-        Item.RadioItem := Params.NetTypeGroup = ngPgSQL;
+        Item.RadioItem := Params.IsAnyPostgreSQL;
         FPopupDatabases.Items.Add(Item);
       end;
       Databases.Free;

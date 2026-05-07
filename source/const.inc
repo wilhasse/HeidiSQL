@@ -47,6 +47,8 @@ const
   ICONINDEX_FUNCTION = 13;
   ICONINDEX_EVENT = 80;
   ICONINDEX_KEYWORD = 25;
+  ICONINDEX_USER = 43;
+  ICONINDEX_ROLE = 95;
 
   // Size of byte units
   {Kibibyte} SIZE_KB = Int64(1024);
@@ -97,7 +99,8 @@ const
   MsgUnhandledNetType: String = 'Unhandled connection type (%d)';
   MsgUnhandledControl: String = 'Unhandled control in %s';
   MsgDisconnect: String = 'Connection to %s closed at %s';
-  TextInvalidColumn: String = '?';
+  // This must be an empty string, otherwise TTableColumn's get GenerationExpression=XYZ on old servers
+  TextInvalidColumn: String = '';
   FILEFILTER_SQLITEDB = '*.sqlite3;*.sqlite;*.db;*.s3db';
   FILEEXT_SQLITEDB = 'sqlite3';
   PROPOSAL_ITEM_HEIGHT = 18;
