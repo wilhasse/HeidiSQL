@@ -527,6 +527,14 @@ end;
 
 procedure TfrmTextEditor.btnApplyClick(Sender: TObject);
 begin
+  if (FMaxLength > 0) and (MemoText.GetTextLen > FMaxLength) then begin
+    MessageDialog(
+      f_('Text is too long for this column: %s characters, maximum %s.',
+        [FormatNumber(MemoText.GetTextLen), FormatNumber(FMaxLength)]),
+      mtError,
+      [mbOK]);
+    Exit;
+  end;
   FClosingByApplyButton := True;
   Close;
 end;

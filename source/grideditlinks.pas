@@ -1187,6 +1187,10 @@ function TInplaceEditorLink.BeginEdit: Boolean;
 begin
   Result := inherited BeginEdit;
   if Result then begin
+    if FMaxLength < MaxInt then
+      FEdit.MaxLength := FMaxLength
+    else
+      FEdit.MaxLength := 0;
     FButton.Visible := ButtonVisible;
     SetBounds(Rect(0, 0, 0, 0));
     if (Length(FEdit.Text) >= GRIDMAXDATA) or (ScanLineBreaks(FEdit.Text) <> lbsNone) then

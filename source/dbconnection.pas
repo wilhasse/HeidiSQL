@@ -9793,8 +9793,18 @@ end;
 
 
 procedure TDBQuery.SetCol(Column: Integer; NewText: String; Null: Boolean; IsFunction: Boolean);
+var
+  MaxLen: Int64;
 begin
   PrepareEditing;
+  if (not Null) and (not IsFunction) and (DataType(Column).Category = dtcText) then begin
+    MaxLen := MaxLength(Column);
+    if (MaxLen > 0) and (MaxLen < MaxInt) and (Length(NewText) > MaxLen) then begin
+      raise EDbError.CreateFmt(
+        _('Value for column "%s" is too long: %s characters, maximum %s.'),
+        [FColumnOrgNames[Column], FormatNumber(Length(NewText)), FormatNumber(MaxLen)]);
+    end;
+  end;
   if not Assigned(FCurrentUpdateRow) then begin
     CreateUpdateRow;
     EnsureFullRow(False);
