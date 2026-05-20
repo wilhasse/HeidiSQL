@@ -1649,7 +1649,7 @@ var
   Command: String;
 begin
   Command := UpperCase(getFirstWord(TSQLBatch.GetSQLWithoutComments(SQL)));
-  Result := (Command = 'UPDATE') or (Command = 'DELETE');
+  Result := (Command = 'REPLACE') or (Command = 'UPDATE') or (Command = 'DELETE');
 end;
 
 
@@ -2317,7 +2317,7 @@ var
 begin
   Result := False;
   for Statement in Statements do begin
-    if Statement.Kind in [smskUpdate, smskDelete] then begin
+    if Statement.Kind in [smskReplace, smskUpdate, smskDelete] then begin
       Result := True;
       Break;
     end;
@@ -3198,7 +3198,6 @@ finalization
   SqlMonitorAuthLock.Free;
 
 end.
-
 
 
 
