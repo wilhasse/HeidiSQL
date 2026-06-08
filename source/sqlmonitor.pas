@@ -1171,6 +1171,66 @@ begin
 end;
 
 
+function ReadConnectionSessionBoolSetting(Connection: TDBConnection; SettingIndex: TAppSettingIndex; DefaultValue: Boolean): Boolean;
+begin
+  Result := DefaultValue;
+  if (Connection = nil) or Trim(Connection.Parameters.SessionPath).IsEmpty or (not Assigned(AppSettings)) then
+    Exit;
+  System.TMonitor.Enter(AppSettings);
+  try
+    AppSettings.StorePath;
+    try
+      AppSettings.SessionPath := Connection.Parameters.SessionPath;
+      Result := AppSettings.ReadBool(SettingIndex, '', DefaultValue);
+    finally
+      AppSettings.RestorePath;
+    end;
+  finally
+    System.TMonitor.Exit(AppSettings);
+  end;
+end;
+
+
+function ConnectionSessionSettingExists(Connection: TDBConnection; SettingIndex: TAppSettingIndex): Boolean;
+begin
+  Result := False;
+  if (Connection = nil) or Trim(Connection.Parameters.SessionPath).IsEmpty or (not Assigned(AppSettings)) then
+    Exit;
+  System.TMonitor.Enter(AppSettings);
+  try
+    AppSettings.StorePath;
+    try
+      AppSettings.SessionPath := Connection.Parameters.SessionPath;
+      Result := AppSettings.ValueExists(SettingIndex);
+    finally
+      AppSettings.RestorePath;
+    end;
+  finally
+    System.TMonitor.Exit(AppSettings);
+  end;
+end;
+
+
+function ReadConnectionSessionStringSetting(Connection: TDBConnection; SettingIndex: TAppSettingIndex; DefaultValue: String): String;
+begin
+  Result := DefaultValue;
+  if (Connection = nil) or Trim(Connection.Parameters.SessionPath).IsEmpty or (not Assigned(AppSettings)) then
+    Exit;
+  System.TMonitor.Enter(AppSettings);
+  try
+    AppSettings.StorePath;
+    try
+      AppSettings.SessionPath := Connection.Parameters.SessionPath;
+      Result := AppSettings.ReadString(SettingIndex, '', DefaultValue);
+    finally
+      AppSettings.RestorePath;
+    end;
+  finally
+    System.TMonitor.Exit(AppSettings);
+  end;
+end;
+
+
 procedure EnsureSqlMonitorConfigurationLoaded;
 begin
   System.TMonitor.Enter(SqlMonitorConfigLock);
@@ -1803,6 +1863,24 @@ begin
 end;
 
 
+function SqlMonitorRequiresTicket(Connection: TDBConnection): Boolean;
+var
+  CustomerName: String;
+begin
+  if (Connection = nil) or (not ReadConnectionSessionBoolSetting(Connection, asApiManaged, False)) then
+    Exit(SqlMonitorIsProductionTarget(Connection));
+  if ConnectionSessionSettingExists(Connection, asApiRequiresTicket) then
+    Exit(ReadConnectionSessionBoolSetting(Connection, asApiRequiresTicket, True));
+
+  CustomerName := Trim(ReadConnectionSessionStringSetting(Connection, asApiCustomer, ''));
+  if SameText(CustomerName, 'LAB') or SameText(Copy(CustomerName, 1, 4), 'LAB\') or
+    SameText(Copy(CustomerName, 1, 6), 'LAB - ') then
+    Exit(False);
+
+  Result := SqlMonitorIsProductionTarget(Connection);
+end;
+
+
 function SqlMonitorTargetDisplayName(Connection: TDBConnection): String;
 begin
   Result := '';
@@ -2052,7 +2130,7 @@ begin
   if not SqlMonitorShouldHandle(Connection) then
     Exit;
 
-  if HasWrites and (not SqlMonitorIsTestTarget(Connection)) then begin
+  if HasWrites and SqlMonitorRequiresTicket(Connection) then begin
     if not PromptForTicketNumber(Connection, StatementSql, HasGuardedWrites, TicketNumber) then begin
       Result := False;
       Exit;
@@ -3198,7 +3276,4 @@ finalization
   SqlMonitorAuthLock.Free;
 
 end.
-
-
-
 

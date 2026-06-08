@@ -232,7 +232,7 @@ type
     asCompletionProposal, asCompletionProposalInterval, asCompletionProposalSearchOnMid, asCompletionProposalWidth, asCompletionProposalNbLinesInWindow, asAutoUppercase,
     asTabsToSpaces, asFilterPanel, asAllowMultipleInstances, asFindDialogSearchHistory, asGUIFontName, asGUIFontSize,
     asTheme, asIconPack, asWebSearchBaseUrl, asSqlMonitorUrl, asSqlMonitorApiKey, asSqlMonitorCentralAuthEnabled,
-    asApiManaged, asApiConnectionId, asApiMatchHost, asApiMatchDatabase, asApiLastSyncAt, asApiArchived, asApiCustomer,
+    asApiManaged, asApiConnectionId, asApiMatchHost, asApiMatchDatabase, asApiLastSyncAt, asApiArchived, asApiCustomer, asApiRequiresTicket,
     asManagedColorProduction, asManagedColorReplica, asManagedColorTest, asManagedColorOther,
     asConfirmConnectionSwitch,
     asFindDialogReplaceHistory, asMaxQueryResults, asLogErrors,
@@ -4276,6 +4276,7 @@ begin
   InitSetting(asApiLastSyncAt,                    'ApiLastSyncAt',                         0, False, '', True);
   InitSetting(asApiArchived,                      'ApiArchived',                           0, False, '', True);
   InitSetting(asApiCustomer,                      'ApiCustomer',                           0, False, '', True);
+  InitSetting(asApiRequiresTicket,                'ApiRequiresTicket',                     0, True, '', True);
   InitSetting(asRecentFilter,                     '%s',                                    0, False, '', True);
   InitSetting(asTimestampColumns,                 'TimestampColumns',                      0, False, '', True);
   InitSetting(asDateTimeEditorCursorPos,          'DateTimeEditor_CursorPos_Type%s',       0);

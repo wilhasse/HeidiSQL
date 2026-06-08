@@ -32,6 +32,7 @@ type
     Comment: String;
     SortOrder: Integer;
     Enabled: Boolean;
+    RequiresTicket: Boolean;
     FolderName: String;
     DisplayName: String;
   end;
@@ -338,7 +339,7 @@ end;
 
 
 procedure UpdateSessionMetadata(const SessionPath: String; const ConnectionId, HostName, DatabaseName,
-  CustomerName, SyncStamp: String; Archived: Boolean);
+  CustomerName, SyncStamp: String; Archived, RequiresTicket: Boolean);
 begin
   WriteSessionBoolSetting(SessionPath, asApiManaged, True);
   WriteSessionStringSetting(SessionPath, asApiConnectionId, ConnectionId);
@@ -347,6 +348,7 @@ begin
   WriteSessionStringSetting(SessionPath, asApiCustomer, CustomerName);
   WriteSessionStringSetting(SessionPath, asApiLastSyncAt, SyncStamp);
   WriteSessionBoolSetting(SessionPath, asApiArchived, Archived);
+  WriteSessionBoolSetting(SessionPath, asApiRequiresTicket, RequiresTicket);
 end;
 
 
@@ -621,6 +623,7 @@ begin
       CatalogItem.Comment := GetJsonString(ItemObject, 'comment');
       CatalogItem.SortOrder := GetJsonInt(ItemObject, 'sort_order', 0);
       CatalogItem.Enabled := GetJsonBool(ItemObject, 'enabled', True);
+      CatalogItem.RequiresTicket := GetJsonBool(ItemObject, 'requires_ticket', True);
       CatalogItem.FolderName := GetJsonString(ItemObject, 'folder_name');
       CatalogItem.DisplayName := GetJsonString(ItemObject, 'display_name');
 
@@ -906,7 +909,7 @@ begin
     MoveSessionPath(Params, TargetPath);
     Params.SaveToRegistry;
     UpdateSessionMetadata(Params.SessionPath, SessionRef.ApiConnectionId, Params.Hostname,
-      StoredSessionDatabase(Params), CustomerFolder, SyncStamp, True);
+      StoredSessionDatabase(Params), CustomerFolder, SyncStamp, True, True);
     RemovedPaths.AddOrSetValue(OldPath, True);
     SessionRef.SessionPath := Params.SessionPath;
     SessionRef.Archived := True;
@@ -1028,7 +1031,7 @@ begin
         MoveSessionPath(Params, FinalPath);
         Params.SaveToRegistry;
         UpdateSessionMetadata(Params.SessionPath, Item.ConnectionId, Item.Host, Item.DatabaseName,
-          FolderName, SyncStamp, False);
+          FolderName, SyncStamp, False, Item.RequiresTicket);
 
         if Assigned(Winner) then begin
           Winner.SessionPath := Params.SessionPath;
