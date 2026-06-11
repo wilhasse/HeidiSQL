@@ -11412,6 +11412,8 @@ begin
   except on E:EDbError do
     ErrorDialog(_('Grid editing error'), E.Message);
   end;
+  if not Allowed then
+    FGridEditFunctionMode := False;
 end;
 
 procedure TMainForm.AnyGridEdited(Sender: TBaseVirtualTree; Node:
@@ -11431,6 +11433,7 @@ begin
   // Reassign Esc to "Cancel row editing" action
   actDataCancelChanges.ShortCut := TextToShortcut('Esc');
   actDataPostChanges.ShortCut := TextToShortcut('Ctrl+Enter');
+  FGridEditFunctionMode := False;
 end;
 
 procedure TMainForm.AnyGridCreateEditor(Sender: TBaseVirtualTree; Node:

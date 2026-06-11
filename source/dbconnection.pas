@@ -9797,6 +9797,10 @@ var
   MaxLen: Int64;
 begin
   PrepareEditing;
+  if IsFunction and Trim(NewText).IsEmpty then
+    raise EDbError.CreateFmt(
+      _('SQL expression for column "%s" is empty. Use normal grid editing to store an empty string.'),
+      [FColumnOrgNames[Column]]);
   if (not Null) and (not IsFunction) and (DataType(Column).Category = dtcText) then begin
     MaxLen := MaxLength(Column);
     if (MaxLen > 0) and (MaxLen < MaxInt) and (Length(NewText) > MaxLen) then begin
@@ -9972,8 +9976,13 @@ begin
         end;
         if Cell.NewIsNull then
           Val := 'NULL'
-        else if Cell.NewIsFunction then
-          Val := Cell.NewText
+        else if Cell.NewIsFunction then begin
+          if Trim(Cell.NewText).IsEmpty then
+            raise EDbError.CreateFmt(
+              _('SQL expression for column "%s" is empty. Use normal grid editing to store an empty string.'),
+              [FColumnOrgNames[i]]);
+          Val := Cell.NewText;
+        end
         else case Datatype(i).Category of
           dtcInteger, dtcReal:
             Val := Connection.EscapeString(Cell.NewText, Datatype(i));
